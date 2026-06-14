@@ -1,7 +1,7 @@
-import { useAudioPlayer } from 'expo-audio';
+import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { synthesizeToFile, getVoices, type SynthesisResult, type Voice } from 'expo-tts-file';
-import { useState } from 'react';
-import { Button, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Button, ScrollView, Text, View } from 'react-native';
 
 export default function App() {
   const [result, setResult] = useState<SynthesisResult | null>(null);
@@ -10,6 +10,15 @@ export default function App() {
 
   // Re-points at the latest synthesized file whenever `result` changes.
   const player = useAudioPlayer(result?.uri ?? undefined);
+
+  // Keep audio playing when the screen locks / the app is backgrounded.
+  useEffect(() => {
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: 'doNotMix',
+    }).catch(() => {});
+  }, []);
 
   async function run(text: string, language: string) {
     setError(null);
@@ -31,7 +40,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView style={styles.container}>
         <Text style={styles.header}>expo-tts-file</Text>
 
@@ -60,7 +69,7 @@ export default function App() {
 
         {error && <Text style={styles.error}>{error}</Text>}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
