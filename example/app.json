@@ -29,6 +29,14 @@
         {
           "enableBackgroundPlayback": true
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
       ]
     ]
   }
