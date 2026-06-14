@@ -1,3 +1,4 @@
+import { useAudioPlayer } from 'expo-audio';
 import { synthesizeToFile, getVoices, type SynthesisResult, type Voice } from 'expo-tts-file';
 import { useState } from 'react';
 import { Button, SafeAreaView, ScrollView, Text, View } from 'react-native';
@@ -6,6 +7,9 @@ export default function App() {
   const [result, setResult] = useState<SynthesisResult | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-points at the latest synthesized file whenever `result` changes.
+  const player = useAudioPlayer(result?.uri ?? undefined);
 
   async function run(text: string, language: string) {
     setError(null);
@@ -39,6 +43,8 @@ export default function App() {
             <View style={styles.output}>
               <Text selectable>uri: {result.uri}</Text>
               <Text>durationMs: {result.durationMs}</Text>
+              <View style={styles.spacer} />
+              <Button title="▶ Play last" onPress={() => { player.seekTo(0); player.play(); }} />
             </View>
           )}
         </Group>
