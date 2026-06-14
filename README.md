@@ -91,6 +91,10 @@ npx expo run:ios
 
 (Likely fixed in a future SDK patch; revisit when Expo resolves the precompiled-framework header bug.)
 
+## Prior art
+
+On-device TTS→file in React Native isn't new — see [`react-native-tts-export`](https://github.com/NoodleOfDeath/react-native-tts-export) (a fork of `react-native-tts`), which produces the same per-platform formats. `expo-tts-file` differs by being a **maintained, New-Architecture, Expo Modules API** package for current Expo / React Native; the older modules are unmaintained and predate the New Architecture default. Background audio itself was never the gap — `expo-av`/`expo-audio` have supported background playback for years; the gap was a clean, current TTS→file module to feed them.
+
 ## License
 
 MIT © Kseniia Blazhkovskaia
