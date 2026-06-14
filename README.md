@@ -69,6 +69,28 @@ npm install
 npx expo run:android   # or: npx expo run:ios
 ```
 
+## Troubleshooting
+
+### iOS build fails with `cstdlib` / `RCTBridge` / header-not-found errors
+
+This is a **known Expo SDK 56 issue** with its default precompiled XCFrameworks (a nested `xcodebuild` drops `HEADER_SEARCH_PATHS`), not something specific to this module — `expo-tts-file`'s own Swift compiles fine. Symptoms: `'cstdlib' file not found`, `'ExpoFileSystem/…​.h' file not found`, or `duplicate interface definition for class 'RCTBridge'`.
+
+Workaround — build React Native from source. In your app config via [`expo-build-properties`](https://docs.expo.dev/versions/latest/sdk/build-properties/):
+
+```json
+["expo-build-properties", { "ios": { "buildReactNativeFromSource": true } }]
+```
+
+and before building (clean prebuild, first build is slow):
+
+```sh
+export RCT_USE_PREBUILT_RNCORE=0 RCT_USE_RN_DEP=0 EXPO_USE_PRECOMPILED_MODULES=0
+npx expo prebuild -p ios --clean
+npx expo run:ios
+```
+
+(Likely fixed in a future SDK patch; revisit when Expo resolves the precompiled-framework header bug.)
+
 ## License
 
 MIT © Kseniia Blazhkovskaia
