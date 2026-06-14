@@ -1,70 +1,144 @@
 import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import * as FileSystem from 'expo-file-system/legacy';
 import { synthesizeToFile, getVoices, type SynthesisResult, type Voice } from 'expo-tts-file';
-import { useEffect, useState } from 'react';
-import { Button, ScrollView, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+
+// Long enough to start playback and then background the app / lock the screen
+// to verify audio keeps playing.
+const DEFAULT_TEXT =
+  'This is a background audio test for the expo-tts-file module. ' +
+  'Edit this text, optionally pick a voice in another language below, then generate and play it. ' +
+  'A longer passage like this one lets you start playback, send the app to the background or lock ' +
+  'the screen, and confirm the audio keeps playing. The quick brown fox jumps over the lazy dog — ' +
+  'again and again — until you are satisfied that on-device text-to-speech to a file works end to end.';
 
 export default function App() {
-  const [result, setResult] = useState<SynthesisResult | null>(null);
+  const [text, setText] = useState(DEFAULT_TEXT);
+  const [langFilter, setLangFilter] = useState('en');
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [voice, setVoice] = useState<Voice | null>(null); // null = default (en-US)
+  const [result, setResult] = useState<SynthesisResult | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-points at the latest synthesized file whenever `result` changes.
   const player = useAudioPlayer(result?.uri ?? undefined);
 
-  // Keep audio playing when the screen locks / the app is backgrounded.
   useEffect(() => {
     setAudioModeAsync({
       playsInSilentMode: true,
       shouldPlayInBackground: true,
       interruptionMode: 'doNotMix',
     }).catch(() => {});
+    getVoices()
+      .then(setVoices)
+      .catch((e) => setError(String(e)));
   }, []);
 
-  async function run(text: string, language: string) {
-    setError(null);
-    try {
-      const res = await synthesizeToFile(text, { language, rate: 1.0 });
-      setResult(res);
-    } catch (e) {
-      setError(String(e));
+  const filtered = useMemo(() => {
+    const f = langFilter.trim().toLowerCase();
+    return voices
+      .filter((v) => !f || v.language.toLowerCase().startsWith(f))
+      .sort((a, b) => a.language.localeCompare(b.language) || a.name.localeCompare(b.name))
+      .slice(0, 50);
+  }, [voices, langFilter]);
+
+  async function removeCurrent() {
+    if (result?.uri) {
+      await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
     }
   }
 
-  async function listVoices() {
+  async function generate() {
     setError(null);
+    setBusy(true);
     try {
-      setVoices(await getVoices());
+      await removeCurrent(); // don't let old files pile up in the cache
+      const res = await synthesizeToFile(text, {
+        language: voice?.language ?? 'en-US',
+        rate: 1.0,
+        ...(voice ? { voice: voice.identifier } : {}),
+      });
+      setResult(res);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function deleteFile() {
+    await removeCurrent();
+    setResult(null);
   }
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.container}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.header}>expo-tts-file</Text>
 
-        <Group name="Synthesize to file">
-          <Button title="English" onPress={() => run('Hello, this is a background audio test.', 'en-US')} />
-          <View style={styles.spacer} />
-          <Button title="Русский" onPress={() => run('Привет, это тест фонового аудио.', 'ru-RU')} />
-          {result && (
-            <View style={styles.output}>
-              <Text selectable>uri: {result.uri}</Text>
-              <Text>durationMs: {result.durationMs}</Text>
-              <View style={styles.spacer} />
-              <Button title="▶ Play last" onPress={() => { player.seekTo(0); player.play(); }} />
-            </View>
+        <Group name="Text">
+          <TextInput
+            style={styles.input}
+            value={text}
+            onChangeText={setText}
+            multiline
+            placeholder="Text to synthesize"
+          />
+        </Group>
+
+        <Group name="Voice">
+          <Text style={styles.hint}>Default is English (en-US). Filter by language, then tap a voice.</Text>
+          <TextInput
+            style={styles.filter}
+            value={langFilter}
+            onChangeText={setLangFilter}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="language filter, e.g. en, es, ru"
+          />
+          <Pressable style={[styles.voiceRow, !voice && styles.voiceRowActive]} onPress={() => setVoice(null)}>
+            <Text style={styles.voiceText}>Default (en-US)</Text>
+          </Pressable>
+          {filtered.map((v) => (
+            <Pressable
+              key={v.identifier}
+              style={[styles.voiceRow, voice?.identifier === v.identifier && styles.voiceRowActive]}
+              onPress={() => setVoice(v)}>
+              <Text style={styles.voiceText}>
+                {v.language} · {v.name} · {v.quality}
+              </Text>
+            </Pressable>
+          ))}
+          {voices.length > 0 && (
+            <Text style={styles.hint}>
+              {filtered.length} shown / {voices.length} installed
+            </Text>
           )}
         </Group>
 
-        <Group name="Voices">
-          <Button title={`List voices (${voices.length})`} onPress={listVoices} />
-          {voices.slice(0, 12).map((v) => (
-            <Text key={v.identifier} style={styles.voice}>
-              {v.language} · {v.name} · {v.quality}
-            </Text>
-          ))}
+        <Group name="Generate & play">
+          <Button title={busy ? 'Generating…' : 'Generate'} onPress={generate} disabled={busy} />
+          {result && (
+            <View style={styles.output}>
+              <Text selectable style={styles.mono}>
+                uri: {result.uri}
+              </Text>
+              <Text>durationMs: {result.durationMs}</Text>
+              <View style={styles.row}>
+                <Button
+                  title="▶ Play"
+                  onPress={() => {
+                    player.seekTo(0);
+                    player.play();
+                  }}
+                />
+                <Button title="⏸ Pause" onPress={() => player.pause()} />
+                <Button title="🗑 Delete" onPress={deleteFile} />
+              </View>
+              <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
+            </View>
+          )}
         </Group>
 
         {error && <Text style={styles.error}>{error}</Text>}
@@ -82,13 +156,20 @@ function Group(props: { name: string; children: React.ReactNode }) {
   );
 }
 
-const styles = {
-  header: { fontSize: 30, margin: 20 },
-  groupHeader: { fontSize: 20, marginBottom: 12 },
-  group: { margin: 20, backgroundColor: '#fff', borderRadius: 10, padding: 20 },
+const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#eee' },
-  spacer: { height: 10 },
+  content: { paddingBottom: 40 },
+  header: { fontSize: 30, marginHorizontal: 20, marginTop: 24 },
+  group: { margin: 20, marginTop: 16, backgroundColor: '#fff', borderRadius: 10, padding: 16 },
+  groupHeader: { fontSize: 18, fontWeight: '600', marginBottom: 12 },
+  input: { minHeight: 110, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 10, textAlignVertical: 'top' },
+  filter: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 8, marginBottom: 10 },
+  hint: { fontSize: 12, color: '#666', marginTop: 8 },
+  voiceRow: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 6, marginTop: 4, backgroundColor: '#f3f3f3' },
+  voiceRowActive: { backgroundColor: '#cfe8ff' },
+  voiceText: { fontSize: 13 },
   output: { marginTop: 14, padding: 10, backgroundColor: '#f3f3f3', borderRadius: 6 },
-  voice: { marginTop: 6, fontSize: 12, color: '#333' },
-  error: { margin: 20, color: '#b00020' },
-};
+  row: { flexDirection: 'row', gap: 12, marginTop: 10, flexWrap: 'wrap' },
+  mono: { fontSize: 11 },
+  error: { marginHorizontal: 20, color: '#b00020' },
+});
