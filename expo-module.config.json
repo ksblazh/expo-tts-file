@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ExpoTtsFileModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.ttsfile.ExpoTtsFileModule"]
+  }
+}
