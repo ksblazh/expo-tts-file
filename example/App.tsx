@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import { synthesizeToFile, getVoices, type SynthesisResult, type Voice } from 'expo-tts-file';
@@ -73,9 +74,33 @@ export default function App() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: Constants.statusBarHeight }]}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.header}>expo-tts-file</Text>
+
+        <Group name="Generate & play">
+          <Button title={busy ? 'Generating…' : 'Generate'} onPress={generate} disabled={busy} />
+          {result && (
+            <View style={styles.output}>
+              <Text selectable style={styles.mono}>
+                uri: {result.uri}
+              </Text>
+              <Text>durationMs: {result.durationMs}</Text>
+              <View style={styles.row}>
+                <Button
+                  title="▶ Play"
+                  onPress={() => {
+                    player.seekTo(0);
+                    player.play();
+                  }}
+                />
+                <Button title="⏸ Pause" onPress={() => player.pause()} />
+                <Button title="🗑 Delete" onPress={deleteFile} />
+              </View>
+              <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
+            </View>
+          )}
+        </Group>
 
         <Group name="Text">
           <TextInput
@@ -117,30 +142,6 @@ export default function App() {
           )}
         </Group>
 
-        <Group name="Generate & play">
-          <Button title={busy ? 'Generating…' : 'Generate'} onPress={generate} disabled={busy} />
-          {result && (
-            <View style={styles.output}>
-              <Text selectable style={styles.mono}>
-                uri: {result.uri}
-              </Text>
-              <Text>durationMs: {result.durationMs}</Text>
-              <View style={styles.row}>
-                <Button
-                  title="▶ Play"
-                  onPress={() => {
-                    player.seekTo(0);
-                    player.play();
-                  }}
-                />
-                <Button title="⏸ Pause" onPress={() => player.pause()} />
-                <Button title="🗑 Delete" onPress={deleteFile} />
-              </View>
-              <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
-            </View>
-          )}
-        </Group>
-
         {error && <Text style={styles.error}>{error}</Text>}
       </ScrollView>
     </View>
@@ -159,7 +160,7 @@ function Group(props: { name: string; children: React.ReactNode }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#eee' },
   content: { paddingBottom: 40 },
-  header: { fontSize: 30, marginHorizontal: 20, marginTop: 24 },
+  header: { fontSize: 30, marginHorizontal: 20, marginTop: 12 },
   group: { margin: 20, marginTop: 16, backgroundColor: '#fff', borderRadius: 10, padding: 16 },
   groupHeader: { fontSize: 18, fontWeight: '600', marginBottom: 12 },
   input: { minHeight: 110, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 10, textAlignVertical: 'top' },
