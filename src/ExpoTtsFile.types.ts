@@ -15,6 +15,21 @@ export type SynthesizeOptions = {
    * the language-based voice pick (the voice's own language still applies).
    */
   voice?: string;
+  /**
+   * iOS only: pronounce the WHOLE `text` per this IPA transcription (Apple's
+   * attributed-utterance `AVSpeechSynthesisIPANotationAttribute`) — the public way to
+   * steer pronunciation, e.g. Russian ударение, which the bundled voices ignore as
+   * combining marks in plain text. Best for a single word/short phrase. Honored by the
+   * classic (Vocalizer) voices; some newer Siri voices ignore it — verify by ear.
+   * Android ignores this field (combining stress marks work there natively).
+   */
+  ipa?: string;
+};
+
+/** One run of a mixed utterance: plain text, or text pronounced per its `ipa`. */
+export type SpeechSegment = {
+  text: string;
+  ipa?: string;
 };
 
 export type SynthesisResult = {
