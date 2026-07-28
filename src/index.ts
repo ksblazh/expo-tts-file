@@ -17,15 +17,31 @@ export function synthesizeToFile(
   return ExpoTtsFile.synthesizeToFile(text, options);
 }
 
+/**
+ * iOS only: synthesize a MIXED utterance to a file — each segment is either plain text
+ * or pronounced per its own `ipa` (Apple honors the attribute per range). The
+ * file-bound sibling of {@link speakMixed}, for offline/background playback of
+ * sentences whose individual words need steering (e.g. Russian ударение).
+ *
+ * The attribute is honored on this path too, but — as on the live one — only over
+ * LATIN text: pass a transliterated carrier for the segments you transcribe and leave
+ * the rest plain. No-op promise rejection on Android (combining marks work there).
+ */
+export function synthesizeMixedToFile(
+  segments: SpeechSegment[],
+  options: SynthesizeOptions
+): Promise<SynthesisResult> {
+  return ExpoTtsFile.synthesizeMixedToFile(segments, options);
+}
+
 /** List installed TTS voices, optionally filtered by a BCP-47 language prefix (e.g. "en", "ru-RU"). */
 export function getVoices(language?: string): Promise<Voice[]> {
   return ExpoTtsFile.getVoices(language);
 }
 
 /**
- * iOS only: LIVE speech (not to a file) with the IPA attribute from `options.ipa`.
- * Exists because the write()/file path has reports of dropping the attributed
- * pronunciation — this goes through the ordinary speak() pipeline. No-op promise
+ * iOS only: LIVE speech (not to a file) with the IPA attribute from `options.ipa` —
+ * for interactive playback, where waiting on a file write buys nothing. No-op promise
  * rejection on Android (method not implemented there).
  */
 export function speakIpa(text: string, options: SynthesizeOptions): Promise<boolean> {

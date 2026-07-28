@@ -38,9 +38,12 @@ public class ExpoTtsFileModule: Module {
   // Synthesizers are retained for the duration of a write() so they are not
   // deallocated mid-synthesis (the buffer callback would then never complete).
   private var active = Set<AVSpeechSynthesizer>()
-  // Live-path synthesizer for speakIpa/speakSsml. CRITICAL (verified on device):
-  // the IPA attribute IS honored by speak() but DROPPED by write() — so правильное
-  // ударение exists only on this live path, never in synthesized files.
+  // Live-path synthesizer for speakIpa/speakSsml. On the IPA attribute (device-verified,
+  // iOS 26.5): it is honored on BOTH paths — speak() and write() — but only when the
+  // attributed text is LATIN. Over Cyrillic the voice falls back to its own lexicon and
+  // the transcription is ignored, which is what made the first write() round read as
+  // "write() drops the attribute". So file synthesis carries ударение too, as long as
+  // callers pass a Latin carrier (see synthesizeMixedToFile / SynthesizeOptions.ipa).
   private let liveSynth = AVSpeechSynthesizer()
   private let liveDelegate = LiveSpeechDelegate()
 
@@ -60,29 +63,26 @@ public class ExpoTtsFileModule: Module {
     Name("ExpoTtsFile")
 
     AsyncFunction("synthesizeToFile") { (text: String, options: SynthesizeOptions, promise: Promise) in
-      self.synthesize(text: text, options: options, promise: promise)
+      self.synthesize(utterance: Self.utterance(text: text, ipa: options.ipa, options: options), promise: promise)
     }
 
-    // Live speech with the IPA attribute (same options as synthesizeToFile). The
-    // file path (write()) has reports of dropping the attributed pronunciation —
-    // this speaks through the ordinary speak() pipeline instead. Speak runs on the
-    // MAIN queue (AVSpeechSynthesizer playback is main-thread-sensitive).
+    // Attributed synthesis to a FILE: the same per-word IPA ranges as speakMixed, but
+    // through write(). This is what lets a background/offline player (a podcast built
+    // from clips) carry ударение inside sentences — marked words ride as Latin-carrier
+    // runs with their own transcription, the rest of the sentence reads naturally.
+    AsyncFunction("synthesizeMixedToFile") { (segments: [SpeechSegment], options: SynthesizeOptions, promise: Promise) in
+      guard let utterance = Self.mixedUtterance(segments: segments, options: options) else {
+        promise.reject("ERR_TTS", "No speakable segments.")
+        return
+      }
+      self.synthesize(utterance: utterance, promise: promise)
+    }
+
+    // Live speech with the IPA attribute (same options as synthesizeToFile) — for
+    // interactive playback, where waiting on a file write is pointless. Speak runs on
+    // the MAIN queue (AVSpeechSynthesizer playback is main-thread-sensitive).
     AsyncFunction("speakIpa") { (text: String, options: SynthesizeOptions, promise: Promise) in
-      let utterance: AVSpeechUtterance
-      if let ipa = options.ipa, !ipa.isEmpty {
-        let key = NSAttributedString.Key(rawValue: AVSpeechSynthesisIPANotationAttribute)
-        utterance = AVSpeechUtterance(attributedString: NSAttributedString(string: text, attributes: [key: ipa]))
-      } else {
-        utterance = AVSpeechUtterance(string: text)
-      }
-      utterance.voice = Self.resolveVoice(identifier: options.voice, language: options.language)
-      if let rate = options.rate {
-        utterance.rate = max(
-          AVSpeechUtteranceMinimumSpeechRate,
-          min(AVSpeechUtteranceMaximumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(rate))
-        )
-      }
-      self.liveSpeak(utterance, promise: promise)
+      self.liveSpeak(Self.utterance(text: text, ipa: options.ipa, options: options), promise: promise)
     }
 
     // Live speech from an SSML document (iOS 16+): a SEPARATE parser from the IPA
@@ -110,26 +110,9 @@ public class ExpoTtsFileModule: Module {
     // text with their own IPA attribute]. Unmarked words keep the voice's natural
     // reading; only the corrected words are steered.
     AsyncFunction("speakMixed") { (segments: [SpeechSegment], options: SynthesizeOptions, promise: Promise) in
-      let attributed = NSMutableAttributedString()
-      let key = NSAttributedString.Key(rawValue: AVSpeechSynthesisIPANotationAttribute)
-      for seg in segments where !seg.text.isEmpty {
-        if let ipa = seg.ipa, !ipa.isEmpty {
-          attributed.append(NSAttributedString(string: seg.text, attributes: [key: ipa]))
-        } else {
-          attributed.append(NSAttributedString(string: seg.text))
-        }
-      }
-      if attributed.length == 0 {
+      guard let utterance = Self.mixedUtterance(segments: segments, options: options) else {
         promise.resolve(false)
         return
-      }
-      let utterance = AVSpeechUtterance(attributedString: attributed)
-      utterance.voice = Self.resolveVoice(identifier: options.voice, language: options.language)
-      if let rate = options.rate {
-        utterance.rate = max(
-          AVSpeechUtteranceMinimumSpeechRate,
-          min(AVSpeechUtteranceMaximumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(rate))
-        )
       }
       self.liveSpeak(utterance, promise: promise)
     }
@@ -156,24 +139,45 @@ public class ExpoTtsFileModule: Module {
     }
   }
 
-  private func synthesize(text: String, options: SynthesizeOptions, promise: Promise) {
-    // IPA pronunciation override: the WHOLE `text` range is pronounced per the given
-    // IPA string via Apple's attributed-utterance mechanism — the only public way to
-    // steer pronunciation (e.g. Russian ударение: the bundled voices ignore combining
-    // acute marks in plain text). Honored by the classic Vocalizer voices; some newer
-    // Siri voices ignore the attribute — callers verify by ear (speech lab).
+  // IPA pronunciation override: the WHOLE `text` range is pronounced per the given IPA
+  // string via Apple's attributed-utterance mechanism — the only public way to steer
+  // pronunciation (e.g. Russian ударение: the bundled voices ignore combining acute
+  // marks in plain text). Honored by the classic Vocalizer voices ON LATIN TEXT; some
+  // newer Siri voices ignore the attribute — callers verify by ear (speech lab).
+  private static func utterance(text: String, ipa: String?, options: SynthesizeOptions) -> AVSpeechUtterance {
     let utterance: AVSpeechUtterance
-    if let ipa = options.ipa, !ipa.isEmpty {
+    if let ipa, !ipa.isEmpty {
       let key = NSAttributedString.Key(rawValue: AVSpeechSynthesisIPANotationAttribute)
       utterance = AVSpeechUtterance(attributedString: NSAttributedString(string: text, attributes: [key: ipa]))
     } else {
       utterance = AVSpeechUtterance(string: text)
     }
-    if let voiceId = options.voice, let voice = AVSpeechSynthesisVoice(identifier: voiceId) {
-      utterance.voice = voice
-    } else {
-      utterance.voice = AVSpeechSynthesisVoice(language: options.language)
+    applyProsody(utterance, options)
+    return utterance
+  }
+
+  // Apple honors the attribute per RANGE, so a sentence rides as [plain runs] +
+  // [marked words as Latin-carrier text with their own IPA]. nil = nothing to say.
+  private static func mixedUtterance(segments: [SpeechSegment], options: SynthesizeOptions) -> AVSpeechUtterance? {
+    let attributed = NSMutableAttributedString()
+    let key = NSAttributedString.Key(rawValue: AVSpeechSynthesisIPANotationAttribute)
+    for seg in segments where !seg.text.isEmpty {
+      if let ipa = seg.ipa, !ipa.isEmpty {
+        attributed.append(NSAttributedString(string: seg.text, attributes: [key: ipa]))
+      } else {
+        attributed.append(NSAttributedString(string: seg.text))
+      }
     }
+    if attributed.length == 0 {
+      return nil
+    }
+    let utterance = AVSpeechUtterance(attributedString: attributed)
+    applyProsody(utterance, options)
+    return utterance
+  }
+
+  private static func applyProsody(_ utterance: AVSpeechUtterance, _ options: SynthesizeOptions) {
+    utterance.voice = resolveVoice(identifier: options.voice, language: options.language)
     if let rate = options.rate {
       utterance.rate = max(
         AVSpeechUtteranceMinimumSpeechRate,
@@ -183,7 +187,9 @@ public class ExpoTtsFileModule: Module {
     if let pitch = options.pitch {
       utterance.pitchMultiplier = max(0.5, min(2.0, Float(pitch)))
     }
+  }
 
+  private func synthesize(utterance: AVSpeechUtterance, promise: Promise) {
     let fileURL: URL
     do {
       fileURL = try Self.outputFileURL()

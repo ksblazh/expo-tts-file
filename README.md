@@ -61,6 +61,40 @@ getVoices(language?: string): Promise<Array<{
 
 Files are written to the app cache directory; manage your own caching/eviction keyed by `(text, language, rate)` if you re-synthesize the same phrases.
 
+### Steering pronunciation (iOS)
+
+Some languages need more than the text: Russian word stress (ударение), for one, is
+unpredictable and the bundled voices ignore the combining acute (U+0301) in plain text.
+Apple's public lever is the IPA attribute on an attributed utterance, and this module
+exposes it on both the file and the live path:
+
+```ts
+// Whole utterance pronounced per one transcription.
+synthesizeToFile('zamok', { language: 'ru-RU', ipa: 'zaˈmok' })
+
+// A sentence where only some words need steering: each segment is plain, or its own IPA.
+synthesizeMixedToFile(
+  [{ text: 'On povesil ' }, { text: 'zamok', ipa: 'zaˈmok' }, { text: ' na dver.' }],
+  { language: 'ru-RU' },
+)
+
+// Same two shapes, spoken live instead of written to a file (interactive taps).
+speakIpa(text, options)         // → Promise<boolean>: false = cancelled by a newer utterance
+speakMixed(segments, options)
+speakSsml(ssml, options)        // iOS 16+, a separate parser: <phoneme alphabet="ipa" ph="…">
+stopLiveSpeech()
+```
+
+**The attribute is honored only over LATIN text.** Over a Cyrillic (or other non-Latin)
+range the voice silently falls back to its own lexicon and your transcription is
+ignored — so pass a **transliterated carrier** and let the IPA carry the pronunciation.
+A useful side effect: if a voice ignores the attribute entirely (some Siri voices do),
+the carrier still reads as a rough approximation rather than silence. Verify by ear with
+an A/B: the same word, two transcriptions — the mechanism is alive iff they differ.
+
+Android ignores `ipa` and the live functions (combining stress marks work natively there);
+web throws.
+
 ## Example app
 
 ```sh

@@ -19,7 +19,11 @@ export type SynthesizeOptions = {
    * iOS only: pronounce the WHOLE `text` per this IPA transcription (Apple's
    * attributed-utterance `AVSpeechSynthesisIPANotationAttribute`) — the public way to
    * steer pronunciation, e.g. Russian ударение, which the bundled voices ignore as
-   * combining marks in plain text. Best for a single word/short phrase. Honored by the
+   * combining marks in plain text. Best for a single word/short phrase.
+   *
+   * Device-verified: honored on BOTH the live and the file path, but only while `text`
+   * is LATIN — over Cyrillic the voice falls back to its own lexicon and the
+   * transcription is silently ignored, so pass a transliterated carrier. Honored by the
    * classic (Vocalizer) voices; some newer Siri voices ignore it — verify by ear.
    * Android ignores this field (combining stress marks work there natively).
    */
