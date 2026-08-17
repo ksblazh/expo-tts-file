@@ -62,7 +62,10 @@ export function speakSsml(ssml: string, options: SynthesizeOptions): Promise<boo
  * range, so marked words ride as Latin-carrier text with their own `ipa` while the
  * rest of the sentence stays plain and reads naturally.
  */
-export function speakMixed(segments: SpeechSegment[], options: SynthesizeOptions): Promise<boolean> {
+export function speakMixed(
+  segments: SpeechSegment[],
+  options: SynthesizeOptions
+): Promise<boolean> {
   return ExpoTtsFile.speakMixed(segments, options);
 }
 
