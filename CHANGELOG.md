@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-17
+
+First published release (0.1.0 was the pre-publication cut, see below).
+
 ### Added
 - iOS pronunciation steering via Apple's `AVSpeechSynthesisIPANotationAttribute`:
   `SynthesizeOptions.ipa` (whole-utterance transcription) on `synthesizeToFile`, plus
@@ -12,6 +16,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `synthesizeMixedToFile(segments, options)` — the file-bound sibling of `speakMixed`:
   a sentence where only the marked words carry their own IPA. Lets an offline/background
   player (clips, not live speech) keep e.g. Russian ударение inside sentences.
+- Runtime argument validation in the TS layer: public functions reject with a
+  `TypeError` naming the offending argument (`options.rate`, `segments[1].ipa`, …)
+  instead of an opaque native exception; a jest suite covers the matrix.
+
+### Changed
+- Public functions are declared `async`, so invalid input is always a promise
+  rejection — never a sync throw halfway into a `.then()` chain.
 
 ### Fixed
 - File synthesis resolves the voice the way the live path does (identifier → exact

@@ -1,5 +1,8 @@
 # expo-tts-file
 
+[![CI](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml/badge.svg)](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/expo-tts-file.svg)](https://www.npmjs.com/package/expo-tts-file)
+
 On-device **text-to-speech synthesized to an audio file** for React Native / Expo — offline, no network, no API keys. Turn a string into a playable audio file using the OS's built-in TTS, then play it however you like (e.g. background playback with [`expo-audio`](https://docs.expo.dev/versions/latest/sdk/audio/)).
 
 Built with the [Expo Modules API](https://docs.expo.dev/modules/) (Swift + Kotlin).
@@ -60,6 +63,9 @@ getVoices(language?: string): Promise<Array<{
 ```
 
 Files are written to the app cache directory; manage your own caching/eviction keyed by `(text, language, rate)` if you re-synthesize the same phrases.
+
+Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`, …) reject
+with a `TypeError` naming the argument — before anything crosses into native code.
 
 ### Steering pronunciation (iOS)
 
