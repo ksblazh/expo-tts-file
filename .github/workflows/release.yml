@@ -1,0 +1,41 @@
+name: Release (npm)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # rehearsal: builds, tests, packs — publishes nothing
+
+permissions:
+  contents: read
+  id-token: write # OIDC for npm trusted publishing (no token stored anywhere)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # trusted publishing needs a current npm (OIDC token exchange)
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint -- --max-warnings 0
+      - run: npm test -- --ci
+      - name: Guard — release tag matches package.json version
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "Release tag $TAG != package.json version v$VERSION" >&2
+            exit 1
+          fi
+      - name: Publish to npm (with provenance)
+        if: github.event_name == 'release'
+        run: npm publish
+      - name: Pack only (manual rehearsal)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --dry-run
