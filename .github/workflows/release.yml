@@ -38,4 +38,6 @@ jobs:
         run: npm publish
       - name: Pack only (manual rehearsal)
         if: github.event_name == 'workflow_dispatch'
-        run: npm publish --dry-run
+        # not `npm publish --dry-run`: that still consults the registry and fails
+        # whenever the current version is already published
+        run: npm pack --dry-run
