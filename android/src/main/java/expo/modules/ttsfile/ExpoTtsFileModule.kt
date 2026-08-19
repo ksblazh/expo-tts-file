@@ -158,8 +158,11 @@ class ExpoTtsFileModule : Module() {
     req.options.voice?.let { voiceId ->
       engine.voices?.firstOrNull { it.name == voiceId }?.let { engine.voice = it }
     }
-    req.options.rate?.let { engine.setSpeechRate(it.toFloat()) }
-    req.options.pitch?.let { engine.setPitch(it.toFloat()) }
+    // Rate and pitch are engine-global and survive between requests (unlike the voice,
+    // which setLanguage above resets), so they are always set: an omitted option means
+    // "platform default", not "whatever the previous request happened to use".
+    engine.setSpeechRate(req.options.rate?.toFloat() ?: 1.0f)
+    engine.setPitch(req.options.pitch?.toFloat() ?: 1.0f)
 
     val result = engine.synthesizeToFile(req.text, Bundle(), req.file, req.utteranceId)
     if (result != TextToSpeech.SUCCESS) {

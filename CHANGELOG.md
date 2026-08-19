@@ -5,6 +5,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- iOS: a live utterance that superseded another (`speakIpa` / `speakMixed` / `speakSsml`
+  called twice in a row) resolved `false` immediately — the `didCancel` of the stopped
+  utterance, delivered asynchronously, settled the promise of the one replacing it. The
+  delegate now keys its completion by utterance, so each call resolves on its own
+  outcome.
+- iOS: `synthesizeToFile` / `synthesizeMixedToFile` resolved before the output file was
+  closed. `AVAudioFile` finalizes the header on deallocation, so a caller that opened the
+  URI immediately could see a truncated file or a zero duration; the file is now closed
+  before the promise resolves.
+- Android: `rate` and `pitch` leaked between requests — they are engine-global, and were
+  applied only when present, so a later call that omitted them inherited the previous
+  values. Both are now always set, with the platform default when omitted.
+
 ## [0.2.0] — 2026-08-17
 
 First published release (0.1.0 was the pre-publication cut, see below).

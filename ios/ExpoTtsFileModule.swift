@@ -17,20 +17,35 @@ struct SpeechSegment: Record {
 // Completion relay for the live synthesizer: resolves speakIpa/speakSsml promises on
 // natural finish (true) or cancellation (false) so JS can chain playback correctly.
 private class LiveSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
-  var completion: ((Bool) -> Void)?
+  // The completion is keyed by the utterance it belongs to. didCancel for a stopped
+  // utterance is delivered asynchronously, so an unkeyed completion would be settled
+  // by the cancellation of the utterance it just replaced — resolving the new promise
+  // false while its speech is in fact playing.
+  private var pending: (utterance: AVSpeechUtterance, completion: (Bool) -> Void)?
 
-  private func settle(_ finished: Bool) {
-    let cb = completion
-    completion = nil
-    cb?(finished)
+  func expect(_ utterance: AVSpeechUtterance, completion: @escaping (Bool) -> Void) {
+    pending = (utterance, completion)
+  }
+
+  /// Settle whatever is pending (used when a new utterance supersedes it).
+  func settleNow(_ finished: Bool) {
+    guard let current = pending else { return }
+    pending = nil
+    current.completion(finished)
+  }
+
+  private func settle(_ utterance: AVSpeechUtterance, _ finished: Bool) {
+    guard let current = pending, current.utterance === utterance else { return }
+    pending = nil
+    current.completion(finished)
   }
 
   func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    settle(true)
+    settle(utterance, true)
   }
 
   func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-    settle(false)
+    settle(utterance, false)
   }
 }
 
@@ -48,13 +63,15 @@ public class ExpoTtsFileModule: Module {
   private let liveDelegate = LiveSpeechDelegate()
 
   // Replace any pending completion (cancelled) and speak on the main queue
-  // (AVSpeechSynthesizer playback is main-thread-sensitive).
+  // (AVSpeechSynthesizer playback is main-thread-sensitive). The previous promise is
+  // settled and the synthesizer stopped BEFORE the new completion is registered, so the
+  // late didCancel of the stopped utterance cannot settle the new one.
   private func liveSpeak(_ utterance: AVSpeechUtterance, promise: Promise) {
     DispatchQueue.main.async {
       if self.liveSynth.delegate == nil { self.liveSynth.delegate = self.liveDelegate }
-      self.liveDelegate.completion?(false)
-      self.liveDelegate.completion = { finished in promise.resolve(finished) }
+      self.liveDelegate.settleNow(false)
       self.liveSynth.stopSpeaking(at: .immediate)
+      self.liveDelegate.expect(utterance) { finished in promise.resolve(finished) }
       self.liveSynth.speak(utterance)
     }
   }
@@ -209,6 +226,9 @@ public class ExpoTtsFileModule: Module {
     let finish: (Result<Void, Error>) -> Void = { [weak self] result in
       if settled { return }
       settled = true
+      // Close the file BEFORE resolving: AVAudioFile finalizes the header when it is
+      // deallocated, and the caller may open the URI the instant the promise resolves.
+      audioFile = nil
       DispatchQueue.main.async { self?.active.remove(synthesizer) }
       switch result {
       case .success:
