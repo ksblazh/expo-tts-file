@@ -1,0 +1,57 @@
+name: Android build
+
+# Compiles the Kotlin the TS gate never touches. The module has no standalone Gradle
+# project — the example app autolinks it (`expo.autolinking.nativeModulesDir`), so the
+# job prebuilds the example and assembles the module through it.
+# Split from the iOS build so each platform carries its own status badge.
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'example/**'
+      - 'expo-module.config.json'
+      - 'package.json'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'example/**'
+      - 'expo-module.config.json'
+      - 'package.json'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android (Kotlin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: example/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install example dependencies
+        working-directory: example
+        run: npm ci
+      - name: Prebuild the Android project
+        working-directory: example
+        run: npx expo prebuild -p android --no-install
+      # Builds the autolinked module library itself — no JS bundling, so this stays a
+      # pure compile check of android/src.
+      - name: Compile the module
+        working-directory: example/android
+        run: ./gradlew :expo-tts-file:assembleRelease --no-daemon

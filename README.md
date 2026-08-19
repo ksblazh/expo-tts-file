@@ -1,6 +1,8 @@
 # expo-tts-file
 
-[![CI](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml/badge.svg)](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml)
+[![CI](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/ksblazh/expo-tts-file/actions/workflows/ci.yml)
+[![Android build](https://github.com/ksblazh/expo-tts-file/actions/workflows/android.yml/badge.svg?branch=main&event=push)](https://github.com/ksblazh/expo-tts-file/actions/workflows/android.yml)
+[![iOS build](https://github.com/ksblazh/expo-tts-file/actions/workflows/ios.yml/badge.svg?branch=main&event=push)](https://github.com/ksblazh/expo-tts-file/actions/workflows/ios.yml)
 [![npm](https://img.shields.io/npm/v/expo-tts-file.svg)](https://www.npmjs.com/package/expo-tts-file)
 
 On-device **text-to-speech synthesized to an audio file** for React Native / Expo — offline, no network, no API keys. Turn a string into a playable audio file using the OS's built-in TTS, then play it however you like (e.g. background playback with [`expo-audio`](https://docs.expo.dev/versions/latest/sdk/audio/)).
