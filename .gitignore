@@ -58,6 +58,7 @@ yarn-error.log
 
 # local working files (kept out of the published repo)
 .local/
+CLAUDE.md
 example/CLAUDE.md
 example/AGENTS.md
 example/.claude/

@@ -13,17 +13,35 @@ Built with the [Expo Modules API](https://docs.expo.dev/modules/) (Swift + Kotli
 
 | Platform | Engine | Output container |
 | --- | --- | --- |
-| iOS / tvOS (13+) | `AVSpeechSynthesizer.write` | CAF (PCM) |
-| Android (API 21+) | `TextToSpeech.synthesizeToFile` | WAV (PCM) |
+| iOS 16.4+ | `AVSpeechSynthesizer.write` | CAF (PCM) |
+| Android API 24+ (7.0) | `TextToSpeech.synthesizeToFile` | WAV (PCM) |
 | Web | — | not supported (`synthesizeToFile` throws; `getVoices` returns `[]`) |
 
 The container is platform-native PCM; both play back with any standard audio player.
+
+The platform floors are those of Expo SDK 56 itself (`expo-modules-core`: iOS 16.4;
+Expo's Gradle plugin: `minSdk` 24) — this module adds no requirement of its own beyond
+them. Verified on an Android physical device and the iOS Simulator; the podspec also
+declares tvOS 16.4, but tvOS has **not** been tested.
+
+Not every function exists on every platform:
+
+| | iOS | Android | Web |
+| --- | --- | --- | --- |
+| `synthesizeToFile`, `getVoices` | ✅ | ✅ | `getVoices` → `[]`, synthesis throws |
+| `synthesizeMixedToFile`, `speakIpa`, `speakMixed`, `speakSsml`, `stopLiveSpeech` | ✅ | ❌ not implemented | ❌ not implemented |
+
+The IPA/live-speech functions are an iOS-only feature (they exist to work around Apple's
+handling of pronunciation); calling them elsewhere rejects. On Android, combining stress
+marks such as `а́` are read natively in plain text, so no equivalent is needed there.
 
 ## Installation
 
 ```sh
 npx expo install expo-tts-file
 ```
+
+Developed and tested against **Expo SDK 56** (React Native 0.85), New Architecture.
 
 This is a native module — it requires a [development build](https://docs.expo.dev/develop/development-builds/introduction/) (it does **not** run in Expo Go). No extra permissions are required for synthesis itself; if you intend to play audio in the background, configure background audio in your app (iOS `UIBackgroundModes: ["audio"]`, Android media playback service) separately.
 
@@ -47,12 +65,16 @@ await synthesizeToFile('Hello', { language: 'en-US', voice: voices[0]?.identifie
 ### API
 
 ```ts
-synthesizeToFile(text: string, options: {
+type SynthesizeOptions = {
   language: string;   // BCP-47, e.g. "en-US", "ru-RU"
-  rate?: number;      // 1.0 = normal
+  rate?: number;      // 1.0 = normal, clamped per platform
   pitch?: number;     // 1.0 = normal
   voice?: string;     // identifier from getVoices()
-}): Promise<{ uri: string; durationMs: number }>
+  ipa?: string;       // iOS only — see "Steering pronunciation" below
+};
+
+synthesizeToFile(text: string, options: SynthesizeOptions):
+  Promise<{ uri: string; durationMs: number }>
 
 getVoices(language?: string): Promise<Array<{
   identifier: string;
@@ -60,9 +82,26 @@ getVoices(language?: string): Promise<Array<{
   language: string;
   quality: 'default' | 'enhanced' | 'premium';
 }>>
+
+// iOS only (see the platform table):
+synthesizeMixedToFile(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions):
+  Promise<{ uri: string; durationMs: number }>
+speakIpa(text: string, options: SynthesizeOptions): Promise<boolean>
+speakMixed(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions): Promise<boolean>
+speakSsml(ssml: string, options: SynthesizeOptions): Promise<boolean>   // iOS 16+
+stopLiveSpeech(): Promise<void>
 ```
 
-Files are written to the app cache directory; manage your own caching/eviction keyed by `(text, language, rate)` if you re-synthesize the same phrases.
+`language` picks the platform default voice for that tag; a bare prefix such as `"ru"`
+resolves to an installed `ru-*` voice. The live `speak*` functions resolve `true` when
+the utterance finished and `false` when it was cancelled (by `stopLiveSpeech` or by a
+newer utterance).
+
+Files are written to `<app cache>/expo-tts-file/tts-<uuid>.{caf,wav}` — on iOS the app's
+`Library/Caches`, on Android `context.cacheDir`. The module never deletes them, so keep
+your own cache keyed by `(text, language, rate)` and delete files you no longer need
+(e.g. with `expo-file-system`); the OS may also evict the whole directory under storage
+pressure, so treat a stored URI as disposable and re-synthesize if it is gone.
 
 Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`, …) reject
 with a `TypeError` naming the argument — before anything crosses into native code.
@@ -98,8 +137,8 @@ A useful side effect: if a voice ignores the attribute entirely (some Siri voice
 the carrier still reads as a rough approximation rather than silence. Verify by ear with
 an A/B: the same word, two transcriptions — the mechanism is alive iff they differ.
 
-Android ignores `ipa` and the live functions (combining stress marks work natively there);
-web throws.
+On Android the `ipa` option is ignored (combining stress marks are read natively there)
+and the live functions are not implemented — see the platform table above.
 
 ## Example app
 
