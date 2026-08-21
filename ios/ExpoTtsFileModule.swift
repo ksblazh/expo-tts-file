@@ -137,6 +137,11 @@ public class ExpoTtsFileModule: Module {
     // Stop the live path (speakIpa/speakSsml/speakMixed); a pending completion resolves false.
     AsyncFunction("stopLiveSpeech") { (promise: Promise) in
       DispatchQueue.main.async {
+        // Settle the pending promise here instead of waiting for didCancel: an
+        // immediate stop does not reliably deliver it (device-observed on iOS 26:
+        // didFinish arrives instead), which resolved `true` for speech the caller had
+        // just stopped — indistinguishable from a natural finish.
+        self.liveDelegate.settleNow(false)
         self.liveSynth.stopSpeaking(at: .immediate)
         promise.resolve(nil)
       }

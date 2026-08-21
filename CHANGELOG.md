@@ -15,6 +15,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   closed. `AVAudioFile` finalizes the header on deallocation, so a caller that opened the
   URI immediately could see a truncated file or a zero duration; the file is now closed
   before the promise resolves.
+- iOS: `stopLiveSpeech()` resolved the stopped utterance's promise `true` — the promise
+  was settled by the synthesizer delegate, and an immediate stop delivers `didFinish`
+  rather than `didCancel` on current iOS, so a caller could not tell "finished" from
+  "I stopped it". The stop now settles the pending promise `false` itself.
 - Android: `rate` and `pitch` leaked between requests — they are engine-global, and were
   applied only when present, so a later call that omitted them inherited the previous
   values. Both are now always set, with the platform default when omitted.
