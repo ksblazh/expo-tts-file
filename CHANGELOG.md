@@ -18,6 +18,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Android: `rate` and `pitch` leaked between requests — they are engine-global, and were
   applied only when present, so a later call that omitted them inherited the previous
   values. Both are now always set, with the platform default when omitted.
+- The example's Metro config aliased the module with a relative `'..'`, which resolves
+  against the working directory — Release builds, bundled by the Xcode build phase,
+  failed with "Unable to resolve module expo-tts-file". The alias is now absolute.
 
 ## [0.2.0] — 2026-08-17
 
