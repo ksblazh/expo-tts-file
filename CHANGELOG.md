@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] — 2026-08-21
 
 ### Fixed
 - iOS: a live utterance that superseded another (`speakIpa` / `speakMixed` / `speakSsml`
@@ -30,6 +30,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - The example's Metro config aliased the module with a relative `'..'`, which resolves
   against the working directory — Release builds, bundled by the Xcode build phase,
   failed with "Unable to resolve module expo-tts-file". The alias is now absolute.
+- `ios/ExpoTtsFile.podspec` and `android/build.gradle` still declared `0.1.0` while the
+  package was published as `0.2.0`. All three now carry the same version, and CI fails
+  the build if they drift apart again.
+
+### Documentation
+- `rate` and `pitch` were documented as "clamped to each platform's supported range".
+  Only iOS clamps; Android passes the value to the TTS engine as given. Stated as it is.
+- The platform note said the module was verified on the iOS *Simulator*; both platforms
+  are now verified on physical devices.
 
 ## [0.2.0] — 2026-08-17
 

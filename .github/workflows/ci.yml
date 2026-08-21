@@ -24,6 +24,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      # The version lives in three manifests; keep them from drifting apart again.
+      - run: npm run check:versions
       - run: npx tsc --noEmit
       - run: npm run lint -- --max-warnings 0
       - run: npm test -- --ci
