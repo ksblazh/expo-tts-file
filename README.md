@@ -23,8 +23,8 @@ The container is platform-native PCM; both play back with any standard audio pla
 
 The platform floors are those of Expo SDK 56 itself (`expo-modules-core`: iOS 16.4;
 Expo's Gradle plugin: `minSdk` 24) — this module adds no requirement of its own beyond
-them. Verified on an Android physical device and the iOS Simulator; the podspec also
-declares tvOS 16.4, but tvOS has **not** been tested.
+them. Verified on physical devices — an iPhone on iOS 26 and a Pixel 9a; the podspec
+also declares tvOS 16.4, but tvOS has **not** been tested.
 
 Not every function exists on every platform:
 
@@ -56,7 +56,7 @@ import { synthesizeToFile, getVoices } from 'expo-tts-file';
 // Synthesize to a file in the app cache directory.
 const { uri, durationMs } = await synthesizeToFile('Hello from on-device TTS', {
   language: 'en-US',
-  rate: 1.0,   // 1.0 = normal; clamped per platform
+  rate: 1.0,   // 1.0 = normal, relative to the platform default
   pitch: 1.0,  // optional
 });
 
@@ -70,8 +70,8 @@ await synthesizeToFile('Hello', { language: 'en-US', voice: voices[0]?.identifie
 ```ts
 type SynthesizeOptions = {
   language: string;   // BCP-47, e.g. "en-US", "ru-RU"
-  rate?: number;      // 1.0 = normal, clamped per platform
-  pitch?: number;     // 1.0 = normal
+  rate?: number;      // 1.0 = normal (see below)
+  pitch?: number;     // 1.0 = normal (see below)
   voice?: string;     // identifier from getVoices()
   ipa?: string;       // iOS only — see "Steering pronunciation" below
 };
@@ -96,9 +96,15 @@ stopLiveSpeech(): Promise<void>
 ```
 
 `language` picks the platform default voice for that tag; a bare prefix such as `"ru"`
-resolves to an installed `ru-*` voice. The live `speak*` functions resolve `true` when
-the utterance finished and `false` when it was cancelled (by `stopLiveSpeech` or by a
-newer utterance).
+resolves to an installed `ru-*` voice.
+
+`rate` and `pitch` are relative to the platform default (`1.0`). iOS clamps them to the
+synthesizer's own range (`AVSpeechUtteranceMinimum`/`MaximumSpeechRate`, pitch 0.5–2.0);
+Android hands the value to the TTS engine as given, so what an extreme value does there
+is up to the engine.
+
+The live `speak*` functions resolve `true` when the utterance finished and `false` when
+it was cancelled — by `stopLiveSpeech` or by a newer utterance.
 
 Files are written to `<app cache>/expo-tts-file/tts-<uuid>.{caf,wav}` — on iOS the app's
 `Library/Caches`, on Android `context.cacheDir`. The module never deletes them, so keep

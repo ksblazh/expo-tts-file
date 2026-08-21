@@ -5,10 +5,14 @@ export type SynthesizeOptions = {
   language: string;
   /**
    * Speech rate. `1.0` is the platform's normal speaking rate; `0.5` is half speed,
-   * `2.0` double. Clamped to each platform's supported range.
+   * `2.0` double. iOS clamps this to the synthesizer's supported range; Android passes
+   * it to the TTS engine as given, which may handle extremes however it likes.
    */
   rate?: number;
-  /** Voice pitch. `1.0` is normal; `<1` lower, `>1` higher. */
+  /**
+   * Voice pitch. `1.0` is normal; `<1` lower, `>1` higher. Clamped to 0.5–2.0 on iOS,
+   * passed to the engine as given on Android.
+   */
   pitch?: number;
   /**
    * A specific voice identifier obtained from {@link getVoices}. When set it overrides
