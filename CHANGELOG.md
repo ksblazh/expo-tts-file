@@ -5,6 +5,32 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- iOS: a live utterance that superseded another (`speakIpa` / `speakMixed` / `speakSsml`
+  called twice in a row) resolved `false` immediately — the `didCancel` of the stopped
+  utterance, delivered asynchronously, settled the promise of the one replacing it. The
+  delegate now keys its completion by utterance, so each call resolves on its own
+  outcome.
+- iOS: `synthesizeToFile` / `synthesizeMixedToFile` resolved before the output file was
+  closed. `AVAudioFile` finalizes the header on deallocation, so a caller that opened the
+  URI immediately could see a truncated file or a zero duration; the file is now closed
+  before the promise resolves.
+- iOS: `stopLiveSpeech()` resolved the stopped utterance's promise `true` — the promise
+  was settled by the synthesizer delegate, and an immediate stop delivers `didFinish`
+  rather than `didCancel` on current iOS, so a caller could not tell "finished" from
+  "I stopped it". The stop now settles the pending promise `false` itself.
+- Android: `rate` and `pitch` leaked between requests — they are engine-global, and were
+  applied only when present, so a later call that omitted them inherited the previous
+  values. Both are now always set, with the platform default when omitted.
+- Calling an iOS-only function (`synthesizeMixedToFile`, `speakIpa`, `speakMixed`,
+  `speakSsml`, `stopLiveSpeech`) on Android or web rejected with a bare
+  `TypeError: undefined is not a function` — those names are absent from the Kotlin
+  module and the web stub. They now reject with a message naming the function and the
+  platform.
+- The example's Metro config aliased the module with a relative `'..'`, which resolves
+  against the working directory — Release builds, bundled by the Xcode build phase,
+  failed with "Unable to resolve module expo-tts-file". The alias is now absolute.
+
 ## [0.2.0] — 2026-08-17
 
 First published release (0.1.0 was the pre-publication cut, see below).

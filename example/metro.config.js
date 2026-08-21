@@ -10,8 +10,8 @@ const config = getDefaultConfig(__dirname);
 config.resolver.blockList = [
   ...Array.from(config.resolver.blockList ?? []),
   // On windows the path will resolve with `\`. We need to escape it with `\\` for the RegExp.
-  new RegExp(path.resolve('..', 'node_modules', 'react').replace(/\\/g, '\\\\')),
-  new RegExp(path.resolve('..', 'node_modules', 'react-native').replace(/\\/g, '\\\\')),
+  new RegExp(path.resolve(__dirname, '..', 'node_modules', 'react').replace(/\\/g, '\\\\')),
+  new RegExp(path.resolve(__dirname, '..', 'node_modules', 'react-native').replace(/\\/g, '\\\\')),
 ];
 
 config.resolver.nodeModulesPaths = [
@@ -19,8 +19,11 @@ config.resolver.nodeModulesPaths = [
   path.resolve(__dirname, '../node_modules'),
 ];
 
+// Absolute, not '..': the Release bundle is produced by the Xcode build phase, whose
+// working directory is not the example root — a relative alias resolves elsewhere and
+// the module goes missing ("Unable to resolve module expo-tts-file").
 config.resolver.extraNodeModules = {
-  'expo-tts-file': '..',
+  'expo-tts-file': path.resolve(__dirname, '..'),
 };
 
 config.watchFolders = [path.resolve(__dirname, '..')];

@@ -1,5 +1,6 @@
 import { SpeechSegment, SynthesizeOptions, SynthesisResult, Voice } from './ExpoTtsFile.types';
 import ExpoTtsFile from './ExpoTtsFileModule';
+import { requireImplemented } from './platform';
 import { requireNonEmptyString, requireOptions, requireSegments } from './validate';
 
 export * from './ExpoTtsFile.types';
@@ -28,12 +29,14 @@ export async function synthesizeToFile(
  *
  * The attribute is honored on this path too, but — as on the live one — only over
  * LATIN text: pass a transliterated carrier for the segments you transcribe and leave
- * the rest plain. No-op promise rejection on Android (combining marks work there).
+ * the rest plain. Rejects on Android and web, where it is not implemented (combining
+ * marks are read natively on Android, so no equivalent is needed there).
  */
 export async function synthesizeMixedToFile(
   segments: SpeechSegment[],
   options: SynthesizeOptions
 ): Promise<SynthesisResult> {
+  requireImplemented(ExpoTtsFile.synthesizeMixedToFile, 'synthesizeMixedToFile()');
   requireSegments(segments, 'synthesizeMixedToFile()');
   requireOptions(options, 'synthesizeMixedToFile()');
   return ExpoTtsFile.synthesizeMixedToFile(segments, options);
@@ -49,10 +52,11 @@ export async function getVoices(language?: string): Promise<Voice[]> {
 
 /**
  * iOS only: LIVE speech (not to a file) with the IPA attribute from `options.ipa` —
- * for interactive playback, where waiting on a file write buys nothing. No-op promise
- * rejection on Android (method not implemented there).
+ * for interactive playback, where waiting on a file write buys nothing. Rejects on
+ * Android and web, where it is not implemented.
  */
 export async function speakIpa(text: string, options: SynthesizeOptions): Promise<boolean> {
+  requireImplemented(ExpoTtsFile.speakIpa, 'speakIpa()');
   requireNonEmptyString(text, 'speakIpa()', 'text');
   requireOptions(options, 'speakIpa()');
   return ExpoTtsFile.speakIpa(text, options);
@@ -64,6 +68,7 @@ export async function speakIpa(text: string, options: SynthesizeOptions): Promis
  * not. Resolves false when SSML is unsupported or unparseable.
  */
 export async function speakSsml(ssml: string, options: SynthesizeOptions): Promise<boolean> {
+  requireImplemented(ExpoTtsFile.speakSsml, 'speakSsml()');
   requireNonEmptyString(ssml, 'speakSsml()', 'ssml');
   requireOptions(options, 'speakSsml()');
   return ExpoTtsFile.speakSsml(ssml, options);
@@ -78,13 +83,18 @@ export async function speakMixed(
   segments: SpeechSegment[],
   options: SynthesizeOptions
 ): Promise<boolean> {
+  requireImplemented(ExpoTtsFile.speakMixed, 'speakMixed()');
   requireSegments(segments, 'speakMixed()');
   requireOptions(options, 'speakMixed()');
   return ExpoTtsFile.speakMixed(segments, options);
 }
 
-/** iOS only: stop the live speakIpa/speakSsml path (a pending promise resolves false). */
-export function stopLiveSpeech(): Promise<void> {
+/**
+ * iOS only: stop the live speakIpa/speakSsml path (a pending promise resolves false).
+ * Rejects on Android and web, where the live path is not implemented.
+ */
+export async function stopLiveSpeech(): Promise<void> {
+  requireImplemented(ExpoTtsFile.stopLiveSpeech, 'stopLiveSpeech()');
   return ExpoTtsFile.stopLiveSpeech();
 }
 

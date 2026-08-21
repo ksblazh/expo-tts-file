@@ -32,8 +32,9 @@ Not every function exists on every platform:
 | `synthesizeMixedToFile`, `speakIpa`, `speakMixed`, `speakSsml`, `stopLiveSpeech` | ✅ | ❌ not implemented | ❌ not implemented |
 
 The IPA/live-speech functions are an iOS-only feature (they exist to work around Apple's
-handling of pronunciation); calling them elsewhere rejects. On Android, combining stress
-marks such as `а́` are read natively in plain text, so no equivalent is needed there.
+handling of pronunciation); calling one elsewhere rejects with an error naming the
+function and the platform. On Android, combining stress marks such as `а́` are read
+natively in plain text, so no equivalent is needed there.
 
 ## Installation
 
