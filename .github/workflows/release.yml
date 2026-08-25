@@ -24,6 +24,11 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run lint -- --max-warnings 0
       - run: npm test -- --ci
+      # Packs and inspects the tarball: nothing untracked ships, no native source is
+      # missing. Doubles as the workflow_dispatch rehearsal — it publishes nothing, and
+      # unlike `npm publish --dry-run` it never consults the registry, so it does not
+      # fail merely because the current version is already published.
+      - run: npm run check:package
       - name: Guard — release tag matches package.json version
         if: github.event_name == 'release'
         run: |
@@ -36,8 +41,3 @@ jobs:
       - name: Publish to npm (with provenance)
         if: github.event_name == 'release'
         run: npm publish
-      - name: Pack only (manual rehearsal)
-        if: github.event_name == 'workflow_dispatch'
-        # not `npm publish --dry-run`: that still consults the registry and fails
-        # whenever the current version is already published
-        run: npm pack --dry-run

@@ -4,13 +4,24 @@
   "description": "On-device text-to-speech synthesized to an audio file (offline TTS-to-file for React Native / Expo).",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "files": [
+    "build",
+    "src/*.ts",
+    "ios",
+    "android/build.gradle",
+    "android/src/main",
+    "expo-module.config.json",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "node internal/module_scripts/build.js",
     "clean": "node internal/module_scripts/clean.js",
     "lint": "eslint src/",
     "check:versions": "node internal/module_scripts/check-versions.js",
+    "check:package": "node internal/module_scripts/check-package.js",
     "test": "node internal/module_scripts/test.js",
     "prepare": "node internal/module_scripts/prepare.js",
+    "prepublishOnly": "node internal/module_scripts/check-package.js",
     "open:ios": "node internal/module_scripts/open-ios.js",
     "open:android": "node internal/module_scripts/open-android.js"
   },
