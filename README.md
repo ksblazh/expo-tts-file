@@ -21,10 +21,10 @@ Built with the [Expo Modules API](https://docs.expo.dev/modules/) (Swift + Kotli
 
 The container is platform-native PCM; both play back with any standard audio player.
 
-The platform floors are those of Expo SDK 56 itself (`expo-modules-core`: iOS 16.4;
-Expo's Gradle plugin: `minSdk` 24) — this module adds no requirement of its own beyond
-them. Verified on physical devices — an iPhone on iOS 26 and a Pixel 9a; the podspec
-also declares tvOS 16.4, but tvOS has **not** been tested.
+The platform floors are the SDK's own (`expo-modules-core`: iOS 16.4; Expo's Gradle
+plugin: `minSdk` 24) — this module adds no requirement of its own beyond them, and SDK 56
+and 57 declare the same two numbers. Verified on physical devices — an iPhone on iOS 26
+and a Pixel 9a; the podspec also declares tvOS 16.4, but tvOS has **not** been tested.
 
 Not every function exists on every platform:
 
@@ -44,7 +44,7 @@ natively in plain text, so no equivalent is needed there.
 npx expo install expo-tts-file
 ```
 
-Developed and tested against **Expo SDK 56** (React Native 0.85), New Architecture.
+Developed and tested against **Expo SDK 57** (React Native 0.86), New Architecture. **SDK 56** (React Native 0.85) is supported too and is what the released 0.2.x line was built against — see [Troubleshooting](#ios-build-fails-with-cstdlib--rctbridge--header-not-found-errors) for the one thing that differs there.
 
 This is a native module — it requires a [development build](https://docs.expo.dev/develop/development-builds/introduction/) (it does **not** run in Expo Go). No extra permissions are required for synthesis itself; if you intend to play audio in the background, configure background audio in your app (iOS `UIBackgroundModes: ["audio"]`, Android media playback service) separately.
 
@@ -161,15 +161,17 @@ npx expo run:android   # or: npx expo run:ios
 
 ### iOS build fails with `cstdlib` / `RCTBridge` / header-not-found errors
 
-This is a **known Expo SDK 56 issue** with its default precompiled XCFrameworks (a nested `xcodebuild` drops `HEADER_SEARCH_PATHS`), not something specific to this module — `expo-tts-file`'s own Swift compiles fine. Symptoms: `'cstdlib' file not found`, `'ExpoFileSystem/…​.h' file not found`, or `duplicate interface definition for class 'RCTBridge'`.
+**This applies to Expo SDK 56 only. It is fixed in SDK 57** — if you are on 57 and see these errors, the cause is something else.
 
-Workaround — build React Native from source. In your app config via [`expo-build-properties`](https://docs.expo.dev/versions/latest/sdk/build-properties/):
+On SDK 56 the default precompiled XCFrameworks fail because a nested `xcodebuild` drops `HEADER_SEARCH_PATHS`. It is not specific to this module — `expo-tts-file`'s own Swift compiles fine. Symptoms: `'cstdlib' file not found`, `'ExpoFileSystem/…​.h' file not found`, or `duplicate interface definition for class 'RCTBridge'`.
+
+Workaround on 56 — build React Native from source. In your app config via [`expo-build-properties`](https://docs.expo.dev/versions/latest/sdk/build-properties/):
 
 ```json
 ["expo-build-properties", { "ios": { "buildReactNativeFromSource": true } }]
 ```
 
-and before building (clean prebuild, first build is slow):
+and before building (clean prebuild, first build is slow — budget 40–60 GB of free disk):
 
 ```sh
 export RCT_USE_PREBUILT_RNCORE=0 RCT_USE_RN_DEP=0 EXPO_USE_PRECOMPILED_MODULES=0
@@ -177,7 +179,7 @@ npx expo prebuild -p ios --clean
 npx expo run:ios
 ```
 
-(Likely fixed in a future SDK patch; revisit when Expo resolves the precompiled-framework header bug.)
+Upgrading to SDK 57 removes all of the above: this repository's own iOS CI build went from ~28 minutes building React Native from source to ~5 minutes on the stock precompiled frameworks, with no `expo-build-properties` in the example app at all.
 
 ## Prior art
 
