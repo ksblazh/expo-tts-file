@@ -1,15 +1,24 @@
 name: iOS build
 
 # Compiles the Swift the TS gate never touches, through the example app that autolinks
-# the module. Runs on main and on demand rather than on every PR. To check a branch
-# before merging:
-#   gh workflow run ios.yml --ref <branch>
+# the module. Split from the Android build so each platform carries its own status badge.
 #
 # Nothing here forces React Native to be built from source: this build uses Expo's
 # default precompiled XCFrameworks, so a regression in them fails here rather than in
-# someone's app.
+# someone's app. That is also what makes running on every pull request affordable — on
+# SDK 56 the same job took ~28 minutes building React Native from source and only ran on
+# main; on 57 it takes ~5 and catches broken Swift before a merge rather than after.
+# A branch can still be checked directly:
+#   gh workflow run ios.yml --ref <branch>
 
 on:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'example/**'
+      - 'expo-module.config.json'
+      - 'package.json'
+      - '.github/workflows/ios.yml'
   push:
     branches: [main]
     paths:
