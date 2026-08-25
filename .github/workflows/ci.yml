@@ -26,6 +26,9 @@ jobs:
       - run: npm ci
       # The version lives in three manifests; keep them from drifting apart again.
       - run: npm run check:versions
+      # package.json#files decides the tarball; check nothing untracked slipped in and
+      # no native source fell out.
+      - run: npm run check:package
       - run: npx tsc --noEmit
       - run: npm run lint -- --max-warnings 0
       - run: npm test -- --ci

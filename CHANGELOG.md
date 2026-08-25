@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- The published tarball is now decided by an allowlist (`package.json#files`) rather than
+  by `.npmignore`: nothing ships unless it is listed, so a stray or gitignored working
+  file in the publishing tree can no longer be swept in. The contents are unchanged
+  except that `.prettierrc`, `eslint.config.cjs` and `tsconfig.json` no longer ship —
+  none of them are used by consumers.
+- Packaging is verified on every build: `npm run check:package` packs the module and
+  fails if a packed file is untracked by git, if a tracked native source is missing from
+  the tarball, or if the compiled entry points are absent. It also runs from
+  `prepublishOnly`, so a manual publish is checked the same way CI is.
+
 ## [0.2.1] — 2026-08-21
 
 ### Fixed
