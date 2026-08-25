@@ -6,6 +6,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Developed and tested against **Expo SDK 57** (React Native 0.86) instead of SDK 56
+  (0.85). No source change was needed to meet it, and nothing is dropped: SDK 56 remains
+  supported, the platform floors are identical in both (`expo-modules-core` declares
+  iOS 16.4 and `minSdk` 24 either way), and `peerDependencies` still accepts any Expo.
 - The published tarball is now decided by an allowlist (`package.json#files`) rather than
   by `.npmignore`: nothing ships unless it is listed, so a stray or gitignored working
   file in the publishing tree can no longer be swept in. The contents are unchanged
@@ -15,6 +19,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   fails if a packed file is untracked by git, if a tracked native source is missing from
   the tarball, or if the compiled entry points are absent. It also runs from
   `prepublishOnly`, so a manual publish is checked the same way CI is.
+
+### Documentation
+- The iOS build workaround (`buildReactNativeFromSource`) is now marked as applying to
+  SDK 56 only — SDK 57 fixed the precompiled-XCFramework header bug it worked around.
+  The instructions stay for anyone still on 56. Upgrading removes the need for
+  `expo-build-properties` and the tens of gigabytes of free disk a source build wants;
+  this repository's own iOS CI went from ~28 minutes to ~5.
 
 ## [0.2.1] — 2026-08-21
 
