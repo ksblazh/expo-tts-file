@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.2] — 2026-08-25
 
 ### Changed
 - Developed and tested against **Expo SDK 57** (React Native 0.86) instead of SDK 56
