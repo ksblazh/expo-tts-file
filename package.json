@@ -1,6 +1,6 @@
 {
   "name": "expo-tts-file",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "On-device text-to-speech synthesized to an audio file (offline TTS-to-file for React Native / Expo).",
   "main": "build/index.js",
   "types": "build/index.d.ts",
