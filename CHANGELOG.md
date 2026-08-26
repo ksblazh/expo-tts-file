@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.3] — 2026-08-26
 
 ### Fixed
 - A request the TTS engine never reported on hung forever, and on Android took every
