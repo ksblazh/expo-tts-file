@@ -20,6 +20,12 @@ declare class ExpoTtsFileModule extends NativeModule<Record<string, never>> {
   speakMixed(segments: SpeechSegment[], options: SynthesizeOptions): Promise<boolean>;
   /** iOS only: stop the live speech path. */
   stopLiveSpeech(): Promise<void>;
+  /** Delete one file this module produced; rejects for anything outside its cache. */
+  deleteFile(uri: string): Promise<void>;
+  /** Delete every file this module produced; resolves with how many went. */
+  clearCache(): Promise<number>;
+  /** Total size in bytes of the files this module produced. */
+  getCacheSize(): Promise<number>;
 }
 
 export default requireNativeModule<ExpoTtsFileModule>('ExpoTtsFile');

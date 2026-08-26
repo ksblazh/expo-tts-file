@@ -1,5 +1,8 @@
 import ExpoTtsFile from '../ExpoTtsFileModule';
 import {
+  clearCache,
+  deleteFile,
+  getCacheSize,
   getVoices,
   speakIpa,
   speakMixed,
@@ -19,6 +22,9 @@ jest.mock('../ExpoTtsFileModule', () => ({
     speakSsml: jest.fn(),
     speakMixed: jest.fn(),
     stopLiveSpeech: jest.fn(),
+    deleteFile: jest.fn(),
+    clearCache: jest.fn(),
+    getCacheSize: jest.fn(),
   },
 }));
 
@@ -76,6 +82,22 @@ describe('delegation to the native module', () => {
       language: 'en-US',
       timeoutMs: 5000,
     });
+  });
+
+  it('the cache functions delegate and pass their results back', async () => {
+    native.deleteFile.mockResolvedValue(undefined);
+    native.clearCache.mockResolvedValue(7);
+    native.getCacheSize.mockResolvedValue(90561);
+
+    await deleteFile('file:///cache/expo-tts-file/tts-1.caf');
+    expect(native.deleteFile).toHaveBeenCalledWith('file:///cache/expo-tts-file/tts-1.caf');
+    await expect(clearCache()).resolves.toBe(7);
+    await expect(getCacheSize()).resolves.toBe(90561);
+  });
+
+  it('deleteFile surfaces the native refusal for a file outside the cache', async () => {
+    native.deleteFile.mockRejectedValue(new Error('ERR_TTS_FOREIGN_FILE'));
+    await expect(deleteFile('file:///Documents/notes.txt')).rejects.toThrow(/ERR_TTS_FOREIGN_FILE/);
   });
 
   it('native rejections propagate to the caller', async () => {
@@ -155,6 +177,12 @@ describe('argument validation (rejects before crossing the bridge)', () => {
   it('speakMixed validates segments', async () => {
     await expect(speakMixed([], EN)).rejects.toThrow(TypeError);
     expect(native.speakMixed).not.toHaveBeenCalled();
+  });
+
+  it('deleteFile rejects an empty uri before crossing the bridge', async () => {
+    await expect(deleteFile('')).rejects.toThrow(/deleteFile\(\) needs a non-empty `uri`/);
+    await expect(deleteFile('   ')).rejects.toThrow(TypeError);
+    expect(native.deleteFile).not.toHaveBeenCalled();
   });
 
   it('getVoices rejects an empty language filter (omit it instead)', async () => {

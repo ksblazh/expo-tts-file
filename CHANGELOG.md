@@ -16,8 +16,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   its terminal zero-length buffer, which previously also leaked the synthesizer.
 - iOS: the engine callback and the watchdog can now both try to settle a request, so the
   flag deciding which one wins is read and set under a lock instead of in two steps.
+- `getVoices` compared the language filter case-sensitively on both platforms, so
+  `getVoices('RU')` or `getVoices('en-us')` returned nothing at all. BCP-47 is
+  case-insensitive and the region subtag is conventionally upper-case, which made this
+  easy to hit.
 
 ### Added
+- Cache management: `deleteFile(uri)`, `clearCache()` and `getCacheSize()`. The module's
+  only output is files and nothing else removed them, so the README used to hand the
+  problem to `expo-file-system`. `deleteFile` takes the `uri` that `synthesizeToFile`
+  returned and refuses anything outside the module's own directory with
+  `ERR_TTS_FOREIGN_FILE` — a blast-radius limit rather than a permission one, since a
+  stale URI should at worst cost a clip that can be synthesized again. Paths are resolved
+  before the check, so neither a `..` escape nor a sibling directory sharing the same name
+  prefix gets through. Deleting a file the OS has already evicted counts as success.
 - `SynthesizeOptions.timeoutMs` — how long to wait for the engine before giving up on a
   request, defaulting to 60000 ms. It is a recovery path for a stuck engine rather than a
   deadline for slow synthesis, so raising it for long texts is the intended use; the live

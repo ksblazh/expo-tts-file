@@ -58,6 +58,9 @@ class ExpoTtsFileModule : Module() {
     get() = appContext.reactContext?.applicationContext
       ?: throw CodedException("React context is not available")
 
+  private val cacheDir: File
+    get() = File(context.cacheDir, "expo-tts-file").apply { mkdirs() }
+
   override fun definition() = ModuleDefinition {
     Name("ExpoTtsFile")
 
@@ -67,9 +70,8 @@ class ExpoTtsFileModule : Module() {
           promise.reject(CodedException("TTS engine failed to initialize"))
           return@withEngine
         }
-        val dir = File(context.cacheDir, "expo-tts-file").apply { mkdirs() }
         val utteranceId = UUID.randomUUID().toString()
-        val file = File(dir, "tts-$utteranceId.wav")
+        val file = File(cacheDir, "tts-$utteranceId.wav")
         enqueue(Request(text, options, promise, utteranceId, file))
       }
     }
@@ -81,8 +83,11 @@ class ExpoTtsFileModule : Module() {
           return@withEngine
         }
         val voices = engine.voices ?: emptySet()
+        // Compared ignoring case: BCP-47 is case-insensitive and the region subtag is
+        // conventionally upper-case, so a caller passing "RU" or "en-us" was previously
+        // told no such voice exists.
         val result = voices
-          .filter { language == null || it.locale.toLanguageTag().startsWith(language) }
+          .filter { language == null || it.locale.toLanguageTag().startsWith(language, ignoreCase = true) }
           .map { voice ->
             mapOf(
               "identifier" to voice.name,
@@ -93,6 +98,35 @@ class ExpoTtsFileModule : Module() {
           }
         promise.resolve(result)
       }
+    }
+
+    // The module's only output is files and nothing else removes them, so it owns the
+    // three operations over its own directory. Deliberately NOT a general file API:
+    // deleting anything else is `expo-file-system`'s job, and confining these keeps the
+    // worst case at "deleted a clip", which re-synthesizing undoes.
+    AsyncFunction("deleteFile") { uri: String ->
+      val file = cacheFileOrNull(uri) ?: throw CodedException(
+        "ERR_TTS_FOREIGN_FILE",
+        "$uri was not written by expo-tts-file. Delete other files with expo-file-system.",
+        null
+      )
+      // Already gone is success, not failure: the OS evicts the cache directory under
+      // storage pressure, so a missing file is the state the caller asked for.
+      if (file.exists() && !file.delete()) {
+        throw CodedException("ERR_TTS_FILE", "Could not delete $uri", null)
+      }
+    }
+
+    // Both take an explicit Promise rather than being written as no-argument lambdas:
+    // the DSL carries two overloads for a bare `{ … }` body, and the Promise form is
+    // unambiguous as well as being what the rest of this module uses.
+    AsyncFunction("clearCache") { promise: Promise ->
+      // Counts what actually went, not what was attempted.
+      promise.resolve(cacheFiles().count { it.delete() })
+    }
+
+    AsyncFunction("getCacheSize") { promise: Promise ->
+      promise.resolve(cacheFiles().sumOf { it.length() }.toDouble())
     }
 
     OnDestroy {
@@ -261,6 +295,29 @@ class ExpoTtsFileModule : Module() {
       clearCurrentLocked()
       return req
     }
+  }
+
+  private fun cacheFiles(): List<File> =
+    cacheDir.listFiles()?.filter { it.isFile } ?: emptyList()
+
+  /**
+   * The file [uri] names, or null if this module did not write it.
+   *
+   * `canonicalFile` resolves `..` and symlinks BEFORE the comparison, so a path that
+   * merely looks contained does not pass. The parent directory is compared rather than a
+   * string prefix — a prefix test would also accept a sibling directory whose name
+   * happens to start the same way, and the module writes flat into one directory anyway.
+   */
+  private fun cacheFileOrNull(uri: String): File? {
+    val parsed = Uri.parse(uri)
+    if (parsed.scheme != null && parsed.scheme != "file") {
+      return null
+    }
+    val path = parsed.path ?: return null
+    return runCatching {
+      val file = File(path).canonicalFile
+      if (file.parentFile == cacheDir.canonicalFile) file else null
+    }.getOrNull()
   }
 
   private fun durationOf(file: File): Int {

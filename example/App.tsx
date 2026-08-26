@@ -1,7 +1,14 @@
 import Constants from 'expo-constants';
 import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
-import * as FileSystem from 'expo-file-system/legacy';
-import { synthesizeToFile, getVoices, type SynthesisResult, type Voice } from 'expo-tts-file';
+import {
+  clearCache,
+  deleteFile,
+  getCacheSize,
+  getVoices,
+  synthesizeToFile,
+  type SynthesisResult,
+  type Voice,
+} from 'expo-tts-file';
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -23,6 +30,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [watchdogLog, setWatchdogLog] = useState<string[]>([]);
+  const [cacheLog, setCacheLog] = useState<string[]>([]);
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
 
   const player = useAudioPlayer(result?.uri ?? undefined);
 
@@ -45,9 +54,11 @@ export default function App() {
       .slice(0, 50);
   }, [voices, langFilter]);
 
+  // The module deletes its own files now, so the example uses that rather than reaching
+  // for expo-file-system — which is the point of the cache API existing.
   async function removeCurrent() {
     if (result?.uri) {
-      await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
+      await deleteFile(result.uri).catch(() => {});
     }
   }
 
@@ -112,9 +123,67 @@ export default function App() {
     }
   }
 
-  async function deleteFile() {
+  async function deleteCurrent() {
     await removeCurrent();
     setResult(null);
+    await refreshCacheSize();
+  }
+
+  async function refreshCacheSize() {
+    setCacheSize(await getCacheSize().catch(() => null));
+  }
+
+  // Device check for the cache API. Steps 3 and 4 are the ones worth having: a path that
+  // escapes the module's directory with `..`, and a sibling directory whose name starts
+  // the same way, both of which a naive prefix check would accept.
+  async function checkCache() {
+    setError(null);
+    setBusy(true);
+    const log: string[] = [];
+    const note = (line: string) => {
+      log.push(line);
+      setCacheLog([...log]);
+    };
+    const refused = async (label: string, step: string, uri: string) => {
+      try {
+        await deleteFile(uri);
+        note(`FAIL ${step} — ${label} was accepted`);
+      } catch (e) {
+        const code = (e as { code?: string })?.code;
+        note(
+          code === 'ERR_TTS_FOREIGN_FILE'
+            ? `PASS ${step} — ${label} refused`
+            : `FAIL ${step} — ${label} rejected as ${code ?? String(e)}`
+        );
+      }
+    };
+    try {
+      const before = await getCacheSize();
+      const res = await synthesizeToFile('Cache check.', { language: 'en-US' });
+      const after = await getCacheSize();
+      note(
+        after > before
+          ? `PASS 1/4 — cache grew ${before} → ${after} bytes`
+          : `FAIL 1/4 — cache did not grow (${before} → ${after})`
+      );
+
+      await deleteFile(res.uri);
+      const cleaned = await getCacheSize();
+      note(
+        cleaned === before
+          ? `PASS 2/4 — deleting the clip returned it to ${cleaned}`
+          : `FAIL 2/4 — expected ${before} bytes after deleting, got ${cleaned}`
+      );
+
+      const dir = res.uri.slice(0, res.uri.lastIndexOf('/'));
+      await refused('a `..` escape', '3/4', `${dir}/../escaped.caf`);
+      await refused('a same-prefix sibling', '4/4', `${dir}-evil/x.caf`);
+    } catch (e) {
+      note(`FAIL — the check itself threw: ${String(e)}`);
+    } finally {
+      await refreshCacheSize();
+      setBusy(false);
+    }
   }
 
   return (
@@ -139,11 +208,35 @@ export default function App() {
                   }}
                 />
                 <Button title="⏸ Pause" onPress={() => player.pause()} />
-                <Button title="🗑 Delete" onPress={deleteFile} />
+                <Button title="🗑 Delete" onPress={deleteCurrent} />
               </View>
               <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
             </View>
           )}
+        </Group>
+
+        <Group name="Cache">
+          <Text style={styles.hint}>
+            {cacheSize === null ? 'size unknown' : `${cacheSize} bytes on disk`}
+          </Text>
+          <View style={styles.row}>
+            <Button title="Size" onPress={refreshCacheSize} />
+            <Button
+              title="Clear"
+              onPress={async () => {
+                const gone = await clearCache();
+                setResult(null);
+                setCacheLog([`cleared ${gone} file(s)`]);
+                await refreshCacheSize();
+              }}
+            />
+            <Button title="Run check" onPress={checkCache} disabled={busy} />
+          </View>
+          {cacheLog.map((line) => (
+            <Text key={line} style={line.startsWith('FAIL') ? styles.fail : styles.pass}>
+              {line}
+            </Text>
+          ))}
         </Group>
 
         <Group name="Watchdog">

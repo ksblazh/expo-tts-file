@@ -51,6 +51,34 @@ export async function getVoices(language?: string): Promise<Voice[]> {
 }
 
 /**
+ * Delete one file this module produced — pass the `uri` from {@link synthesizeToFile}.
+ *
+ * Only files in the module's own cache directory can be deleted; anything else rejects
+ * with `ERR_TTS_FOREIGN_FILE`. That limit is not about permissions — the module runs with
+ * the app's own rights — but about blast radius: deleting arbitrary files is what
+ * `expo-file-system` is for, and confining this keeps a stale URI from costing more than
+ * a clip you can synthesize again. A file the OS has already evicted counts as deleted.
+ */
+export async function deleteFile(uri: string): Promise<void> {
+  requireNonEmptyString(uri, 'deleteFile()', 'uri');
+  return ExpoTtsFile.deleteFile(uri);
+}
+
+/**
+ * Delete every file this module has produced, resolving with how many actually went (a
+ * file that resists deletion is not counted). Do not call it while a synthesis is in
+ * flight — the file being written is one of the ones it removes.
+ */
+export async function clearCache(): Promise<number> {
+  return ExpoTtsFile.clearCache();
+}
+
+/** Total size in bytes of the files this module has produced. */
+export async function getCacheSize(): Promise<number> {
+  return ExpoTtsFile.getCacheSize();
+}
+
+/**
  * iOS only: LIVE speech (not to a file) with the IPA attribute from `options.ipa` —
  * for interactive playback, where waiting on a file write buys nothing. Rejects on
  * Android and web, where it is not implemented.

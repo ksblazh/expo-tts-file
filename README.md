@@ -31,6 +31,7 @@ Not every function exists on every platform:
 | | iOS | Android | Web |
 | --- | --- | --- | --- |
 | `synthesizeToFile`, `getVoices` | ✅ | ✅ | `getVoices` → `[]`, synthesis throws |
+| `deleteFile`, `clearCache`, `getCacheSize` | ✅ | ✅ | report an empty cache (nothing writes one) |
 | `synthesizeMixedToFile`, `speakIpa`, `speakMixed`, `speakSsml`, `stopLiveSpeech` | ✅ | ❌ not implemented | ❌ not implemented |
 
 The IPA/live-speech functions are an iOS-only feature (they exist to work around Apple's
@@ -87,6 +88,10 @@ getVoices(language?: string): Promise<Array<{
   quality: 'default' | 'enhanced' | 'premium';
 }>>
 
+deleteFile(uri: string): Promise<void>   // one file this module produced
+clearCache(): Promise<number>            // resolves with how many files went
+getCacheSize(): Promise<number>          // bytes
+
 // iOS only (see the platform table):
 synthesizeMixedToFile(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions):
   Promise<{ uri: string; durationMs: number }>
@@ -97,7 +102,8 @@ stopLiveSpeech(): Promise<void>
 ```
 
 `language` picks the platform default voice for that tag; a bare prefix such as `"ru"`
-resolves to an installed `ru-*` voice.
+resolves to an installed `ru-*` voice. The `getVoices` filter matches that prefix
+case-insensitively, so `"RU"` and `"en-us"` work as well as `"ru"` and `"en-US"`.
 
 `rate` and `pitch` are relative to the platform default (`1.0`). iOS clamps them to the
 synthesizer's own range (`AVSpeechUtteranceMinimum`/`MaximumSpeechRate`, pitch 0.5–2.0);
@@ -117,13 +123,36 @@ The live `speak*` functions resolve `true` when the utterance finished and `fals
 it was cancelled — by `stopLiveSpeech` or by a newer utterance.
 
 Files are written to `<app cache>/expo-tts-file/tts-<uuid>.{caf,wav}` — on iOS the app's
-`Library/Caches`, on Android `context.cacheDir`. The module never deletes them, so keep
-your own cache keyed by `(text, language, rate)` and delete files you no longer need
-(e.g. with `expo-file-system`); the OS may also evict the whole directory under storage
-pressure, so treat a stored URI as disposable and re-synthesize if it is gone.
+`Library/Caches`, on Android `context.cacheDir`. Nothing is deleted for you, so keep your
+own index keyed by `(text, language, rate)` and remove what you no longer need with
+`deleteFile`; `clearCache` empties the directory and `getCacheSize` reports what it holds.
+The OS may evict the whole directory under storage pressure, so treat a stored URI as
+disposable and re-synthesize if it is gone — which is also why deleting a file that has
+already vanished counts as success rather than an error.
+
+`deleteFile` accepts only files inside that directory and rejects anything else with
+`ERR_TTS_FOREIGN_FILE`. That is a limit on blast radius, not a permission boundary — the
+module runs with your app's own rights. Deleting arbitrary files is what `expo-file-system`
+is for; keeping this one confined means a stale URI costs you a clip you can synthesize
+again, and nothing else. A file you have moved out of the cache to keep it is your app's
+file from then on, and `deleteFile` will refuse it.
 
 Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`/`timeoutMs`, …) reject
 with a `TypeError` naming the argument — before anything crosses into native code.
+
+Failures from the native side reject with a `code` you can branch on:
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_TTS_TIMEOUT` | the engine reported nothing within `timeoutMs` |
+| `ERR_TTS_FOREIGN_FILE` | `deleteFile` was handed a path outside the module's own directory |
+| `ERR_TTS_FILE` | an output file could not be created, or a cache file could not be removed |
+| `ERR_TTS` | the synthesizer failed, or the segments contained nothing speakable (iOS) |
+
+Android raises the first three. Its remaining failures — engine initialization, an
+unsupported language, a synthesis the engine aborted — currently carry their reason in the
+message rather than in a distinct code, so match on the message if you need to tell those
+apart there.
 
 ### Steering pronunciation (iOS)
 
@@ -160,6 +189,14 @@ On Android the `ipa` option is ignored (combining stress marks are read natively
 and the live functions are not implemented — see the platform table above.
 
 ## Example app
+
+The demo app in `example/` exercises the module end to end: synthesis with a
+language-filtered voice picker, playback that keeps going in the background and on the
+lock screen, and the cache functions. It also carries two self-checks that print PASS/FAIL
+— one forces a timeout and confirms the queue recovers behind it, the other confirms
+`deleteFile` refuses a path that escapes the cache directory.
+
+It needs a development build (like any consumer of this module), not Expo Go:
 
 ```sh
 cd example
