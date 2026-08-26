@@ -140,6 +140,20 @@ file from then on, and `deleteFile` will refuse it.
 Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`/`timeoutMs`, …) reject
 with a `TypeError` naming the argument — before anything crosses into native code.
 
+Failures from the native side reject with a `code` you can branch on:
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_TTS_TIMEOUT` | the engine reported nothing within `timeoutMs` |
+| `ERR_TTS_FOREIGN_FILE` | `deleteFile` was handed a path outside the module's own directory |
+| `ERR_TTS_FILE` | an output file could not be created, or a cache file could not be removed |
+| `ERR_TTS` | the synthesizer failed, or the segments contained nothing speakable (iOS) |
+
+Android raises the first three. Its remaining failures — engine initialization, an
+unsupported language, a synthesis the engine aborted — currently carry their reason in the
+message rather than in a distinct code, so match on the message if you need to tell those
+apart there.
+
 ### Steering pronunciation (iOS)
 
 Some languages need more than the text: Russian word stress (ударение), for one, is
@@ -175,6 +189,14 @@ On Android the `ipa` option is ignored (combining stress marks are read natively
 and the live functions are not implemented — see the platform table above.
 
 ## Example app
+
+The demo app in `example/` exercises the module end to end: synthesis with a
+language-filtered voice picker, playback that keeps going in the background and on the
+lock screen, and the cache functions. It also carries two self-checks that print PASS/FAIL
+— one forces a timeout and confirms the queue recovers behind it, the other confirms
+`deleteFile` refuses a path that escapes the cache directory.
+
+It needs a development build (like any consumer of this module), not Expo Go:
 
 ```sh
 cd example
