@@ -22,6 +22,7 @@ export default function App() {
   const [result, setResult] = useState<SynthesisResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [watchdogLog, setWatchdogLog] = useState<string[]>([]);
 
   const player = useAudioPlayer(result?.uri ?? undefined);
 
@@ -68,6 +69,49 @@ export default function App() {
     }
   }
 
+  // Device check for the synthesis watchdog. A request with an impossibly short
+  // `timeoutMs` has to reject with ERR_TTS_TIMEOUT — and then, the part that actually
+  // matters, the NEXT request has to still run. Android runs requests one at a time, so
+  // before the watchdog existed a request the engine never reported on left every later
+  // one pending until the app was restarted. Step 2 is what proves the queue recovers;
+  // on iOS, where each request gets its own synthesizer, it only shows no regression.
+  async function checkWatchdog() {
+    setError(null);
+    setBusy(true);
+    const log: string[] = [];
+    const note = (line: string) => {
+      log.push(line);
+      setWatchdogLog([...log]);
+    };
+    try {
+      try {
+        await synthesizeToFile(text, { language: 'en-US', timeoutMs: 1 });
+        note('FAIL 1/2 — a 1 ms budget resolved instead of timing out');
+      } catch (e) {
+        const code = (e as { code?: string })?.code;
+        note(
+          code === 'ERR_TTS_TIMEOUT'
+            ? 'PASS 1/2 — timed out as ERR_TTS_TIMEOUT'
+            : `FAIL 1/2 — rejected as ${code ?? String(e)}, expected ERR_TTS_TIMEOUT`
+        );
+      }
+      // Bounded on the JS side too: a wedged queue should read as a FAIL line, not as a
+      // button that never comes back.
+      note(
+        await Promise.race([
+          synthesizeToFile('Queue check.', { language: 'en-US' })
+            .then(() => 'PASS 2/2 — the next request still ran')
+            .catch((e) => `FAIL 2/2 — the next request rejected: ${String(e)}`),
+          new Promise<string>((resolve) =>
+            setTimeout(() => resolve('FAIL 2/2 — the queue is still wedged'), 30_000)
+          ),
+        ])
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteFile() {
     await removeCurrent();
     setResult(null);
@@ -100,6 +144,18 @@ export default function App() {
               <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
             </View>
           )}
+        </Group>
+
+        <Group name="Watchdog">
+          <Text style={styles.hint}>
+            Forces a timeout, then checks that the next request still goes through.
+          </Text>
+          <Button title="Run check" onPress={checkWatchdog} disabled={busy} />
+          {watchdogLog.map((line) => (
+            <Text key={line} style={line.startsWith('PASS') ? styles.pass : styles.fail}>
+              {line}
+            </Text>
+          ))}
         </Group>
 
         <Group name="Text">
@@ -172,5 +228,7 @@ const styles = StyleSheet.create({
   output: { marginTop: 14, padding: 10, backgroundColor: '#f3f3f3', borderRadius: 6 },
   row: { flexDirection: 'row', gap: 12, marginTop: 10, flexWrap: 'wrap' },
   mono: { fontSize: 11 },
+  pass: { marginTop: 8, color: '#0a7d28' },
+  fail: { marginTop: 8, color: '#b00020' },
   error: { marginHorizontal: 20, color: '#b00020' },
 });

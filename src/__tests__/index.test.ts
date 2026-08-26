@@ -68,6 +68,16 @@ describe('delegation to the native module', () => {
     expect(native.stopLiveSpeech).toHaveBeenCalledTimes(1);
   });
 
+  it('synthesizeToFile forwards timeoutMs rather than consuming it', async () => {
+    native.synthesizeToFile.mockResolvedValue({ uri: 'file:///cache/tts.caf', durationMs: 1 });
+
+    await synthesizeToFile('hello', { language: 'en-US', timeoutMs: 5000 });
+    expect(native.synthesizeToFile).toHaveBeenCalledWith('hello', {
+      language: 'en-US',
+      timeoutMs: 5000,
+    });
+  });
+
   it('native rejections propagate to the caller', async () => {
     native.synthesizeToFile.mockRejectedValue(new Error('synthesis failed'));
     await expect(synthesizeToFile('hello', EN)).rejects.toThrow('synthesis failed');
@@ -96,6 +106,16 @@ describe('argument validation (rejects before crossing the bridge)', () => {
       /options\.voice/,
     ],
     ['empty ipa', () => synthesizeToFile('hi', { language: 'en', ipa: '' }), /options\.ipa/],
+    [
+      'zero timeoutMs',
+      () => synthesizeToFile('hi', { language: 'en', timeoutMs: 0 }),
+      /options\.timeoutMs/,
+    ],
+    [
+      'negative timeoutMs',
+      () => synthesizeToFile('hi', { language: 'en', timeoutMs: -1 }),
+      /options\.timeoutMs/,
+    ],
   ])('synthesizeToFile rejects on %s', async (_case, call, message) => {
     await expect(call()).rejects.toThrow(TypeError);
     await expect(call()).rejects.toThrow(message);

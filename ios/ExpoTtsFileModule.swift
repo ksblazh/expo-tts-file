@@ -7,6 +7,7 @@ struct SynthesizeOptions: Record {
   @Field var pitch: Double?
   @Field var voice: String?
   @Field var ipa: String?
+  @Field var timeoutMs: Double?
 }
 
 struct SpeechSegment: Record {
@@ -61,6 +62,10 @@ public class ExpoTtsFileModule: Module {
   // callers pass a Latin carrier (see synthesizeMixedToFile / SynthesizeOptions.ipa).
   private let liveSynth = AVSpeechSynthesizer()
   private let liveDelegate = LiveSpeechDelegate()
+  // Watchdog default for the file path, in seconds. The live path has no equivalent:
+  // speech has no expected duration to measure against, and stopLiveSpeech() is already
+  // the way out of it.
+  private static let defaultTimeout: TimeInterval = 60
 
   // Replace any pending completion (cancelled) and speak on the main queue
   // (AVSpeechSynthesizer playback is main-thread-sensitive). The previous promise is
@@ -80,7 +85,11 @@ public class ExpoTtsFileModule: Module {
     Name("ExpoTtsFile")
 
     AsyncFunction("synthesizeToFile") { (text: String, options: SynthesizeOptions, promise: Promise) in
-      self.synthesize(utterance: Self.utterance(text: text, ipa: options.ipa, options: options), promise: promise)
+      self.synthesize(
+        utterance: Self.utterance(text: text, ipa: options.ipa, options: options),
+        options: options,
+        promise: promise
+      )
     }
 
     // Attributed synthesis to a FILE: the same per-word IPA ranges as speakMixed, but
@@ -92,7 +101,7 @@ public class ExpoTtsFileModule: Module {
         promise.reject("ERR_TTS", "No speakable segments.")
         return
       }
-      self.synthesize(utterance: utterance, promise: promise)
+      self.synthesize(utterance: utterance, options: options, promise: promise)
     }
 
     // Live speech with the IPA attribute (same options as synthesizeToFile) — for
@@ -211,7 +220,7 @@ public class ExpoTtsFileModule: Module {
     }
   }
 
-  private func synthesize(utterance: AVSpeechUtterance, promise: Promise) {
+  private func synthesize(utterance: AVSpeechUtterance, options: SynthesizeOptions, promise: Promise) {
     let fileURL: URL
     do {
       fileURL = try Self.outputFileURL()
@@ -226,11 +235,53 @@ public class ExpoTtsFileModule: Module {
     var audioFile: AVAudioFile?
     var totalFrames: AVAudioFramePosition = 0
     var sampleRate: Double = 0
+
+    // The buffer callback and the watchdog below race to settle the promise, from
+    // different queues, so the flag they race on is read and set under a lock rather
+    // than in two steps. Exactly one caller is told it may proceed.
+    let settleLock = NSLock()
     var settled = false
+    let claim: () -> Bool = {
+      settleLock.lock()
+      defer { settleLock.unlock() }
+      if settled { return false }
+      settled = true
+      return true
+    }
+
+    // write() signals completion with a zero-length buffer. An engine that never sends
+    // one leaves the promise pending for the life of the app and the synthesizer
+    // retained in `active`, so a timer settles it instead — recovery for a stuck engine,
+    // not a deadline for slow synthesis (see SynthesizeOptions.timeoutMs).
+    let timeout = options.timeoutMs.map { $0 / 1000.0 } ?? Self.defaultTimeout
+    // The synthesizer is captured weakly: cancelling a work item does not dequeue it, so
+    // a cancelled watchdog still holds whatever it captured until its deadline passes —
+    // which, for a caller synthesizing clip after clip, would pile up a minute's worth of
+    // finished synthesizers. Whenever this body has real work to do, `active` is still
+    // holding the object anyway.
+    let watchdog = DispatchWorkItem { [weak self, weak synthesizer] in
+      // Claiming commits this body to settling the promise: anything it can bail out of
+      // has to be checked before the claim, or the promise it took ownership of would
+      // hang exactly the way this timer exists to prevent.
+      guard claim() else { return }
+      // `audioFile` is deliberately left alone here: the buffer callback may be writing
+      // to it on its own queue at this moment, and closing it from a second thread is
+      // the one thing worse than the leak. Dropping the synthesizer ends the callbacks;
+      // the partial file stays in the cache like every other file this module writes.
+      if let synthesizer {
+        synthesizer.stopSpeaking(at: .immediate)
+        self?.active.remove(synthesizer)
+      }
+      promise.reject(
+        "ERR_TTS_TIMEOUT",
+        "Speech synthesis did not finish within \(Int(timeout * 1000)) ms"
+      )
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
     let finish: (Result<Void, Error>) -> Void = { [weak self] result in
-      if settled { return }
-      settled = true
+      guard claim() else { return }
+      watchdog.cancel()
       // Close the file BEFORE resolving: AVAudioFile finalizes the header when it is
       // deallocated, and the caller may open the URI the instant the promise resolves.
       audioFile = nil
