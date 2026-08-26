@@ -25,6 +25,7 @@ export function requireOptions(options: SynthesizeOptions, api: string): void {
   requireNonEmptyString(options.language, api, 'options.language');
   requirePositiveFinite(options.rate, api, 'options.rate');
   requirePositiveFinite(options.pitch, api, 'options.pitch');
+  requirePositiveFinite(options.timeoutMs, api, 'options.timeoutMs');
   if (options.voice !== undefined) {
     requireNonEmptyString(options.voice, api, 'options.voice');
   }

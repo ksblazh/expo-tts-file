@@ -74,6 +74,7 @@ type SynthesizeOptions = {
   pitch?: number;     // 1.0 = normal (see below)
   voice?: string;     // identifier from getVoices()
   ipa?: string;       // iOS only — see "Steering pronunciation" below
+  timeoutMs?: number; // watchdog for a stuck engine, default 60000 (see below)
 };
 
 synthesizeToFile(text: string, options: SynthesizeOptions):
@@ -103,6 +104,15 @@ synthesizer's own range (`AVSpeechUtteranceMinimum`/`MaximumSpeechRate`, pitch 0
 Android hands the value to the TTS engine as given, so what an extreme value does there
 is up to the engine.
 
+`timeoutMs` is a watchdog, not a deadline. If the engine has reported nothing after that
+long the promise rejects with `ERR_TTS_TIMEOUT` instead of staying pending for the life
+of the app, and on Android the requests queued behind it start moving again — otherwise
+that state needs an app restart to clear. It defaults to `60000`. Raise it when you
+synthesize a lot of text in one call rather than lowering it to fail fast: a timeout that
+fires while the engine is still working turns a request that would have succeeded into an
+error. The live `speak*` functions ignore it, since speech has no expected duration to
+measure against; `stopLiveSpeech()` is the way out of those.
+
 The live `speak*` functions resolve `true` when the utterance finished and `false` when
 it was cancelled — by `stopLiveSpeech` or by a newer utterance.
 
@@ -112,7 +122,7 @@ your own cache keyed by `(text, language, rate)` and delete files you no longer 
 (e.g. with `expo-file-system`); the OS may also evict the whole directory under storage
 pressure, so treat a stored URI as disposable and re-synthesize if it is gone.
 
-Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`, …) reject
+Invalid arguments (empty `text`, missing `language`, non-positive `rate`/`pitch`/`timeoutMs`, …) reject
 with a `TypeError` naming the argument — before anything crosses into native code.
 
 ### Steering pronunciation (iOS)

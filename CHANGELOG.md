@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- A request the TTS engine never reported on hung forever, and on Android took every
+  later request with it: the queue keeps one request in flight at a time and only a
+  completion callback released it, so an engine that fell silent — or a callback whose
+  utterance id did not match, which was discarded without releasing the queue — left
+  every subsequent `synthesizeToFile` pending with no recovery short of restarting the
+  app. Each request now carries a watchdog that rejects it with `ERR_TTS_TIMEOUT` and
+  lets the queue move on. On iOS the same timer covers a `write()` that never delivers
+  its terminal zero-length buffer, which previously also leaked the synthesizer.
+- iOS: the engine callback and the watchdog can now both try to settle a request, so the
+  flag deciding which one wins is read and set under a lock instead of in two steps.
+
+### Added
+- `SynthesizeOptions.timeoutMs` — how long to wait for the engine before giving up on a
+  request, defaulting to 60000 ms. It is a recovery path for a stuck engine rather than a
+  deadline for slow synthesis, so raising it for long texts is the intended use; the live
+  `speak*` functions ignore it.
+
 ## [0.2.2] — 2026-08-25
 
 ### Changed

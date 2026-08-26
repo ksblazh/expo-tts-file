@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import expo.modules.kotlin.Promise
@@ -21,6 +23,7 @@ class SynthesizeOptions : Record {
   @Field var rate: Double? = null
   @Field var pitch: Double? = null
   @Field var voice: String? = null
+  @Field var timeoutMs: Double? = null
 }
 
 class ExpoTtsFileModule : Module() {
@@ -37,13 +40,19 @@ class ExpoTtsFileModule : Module() {
   private var processing = false
   private var current: Request? = null
 
+  // The watchdogs run on the main looper; all they ever do is reject a promise.
+  private val watchdogHandler = Handler(Looper.getMainLooper())
+
   private class Request(
     val text: String,
     val options: SynthesizeOptions,
     val promise: Promise,
     val utteranceId: String,
     val file: File
-  )
+  ) {
+    /** Recovery timer, disarmed by whichever settles the request first. */
+    var watchdog: Runnable? = null
+  }
 
   private val context: Context
     get() = appContext.reactContext?.applicationContext
@@ -87,6 +96,7 @@ class ExpoTtsFileModule : Module() {
     }
 
     OnDestroy {
+      watchdogHandler.removeCallbacksAndMessages(null)
       tts?.shutdown()
       tts = null
     }
@@ -136,10 +146,38 @@ class ExpoTtsFileModule : Module() {
 
   private fun advance() {
     synchronized(queueLock) {
+      clearCurrentLocked()
       processing = false
-      current = null
       pumpLocked()
     }
+  }
+
+  /** Forget the in-flight request and disarm its watchdog. Must hold [queueLock]. */
+  private fun clearCurrentLocked() {
+    current?.let { req ->
+      req.watchdog?.let { watchdogHandler.removeCallbacks(it) }
+      req.watchdog = null
+    }
+    current = null
+  }
+
+  /**
+   * Arm the recovery timer for [req]. Must hold [queueLock].
+   *
+   * Without it a request the engine never reports on holds [processing] forever, and
+   * every later one waits behind it with no way out but an app restart.
+   */
+  private fun armWatchdogLocked(req: Request) {
+    val timeoutMs = req.options.timeoutMs?.toLong() ?: DEFAULT_TIMEOUT_MS
+    val watchdog = Runnable {
+      val timedOut = takeCurrent(req.utteranceId) ?: return@Runnable
+      timedOut.promise.reject(
+        CodedException("ERR_TTS_TIMEOUT", "TTS synthesis did not finish within $timeoutMs ms", null)
+      )
+      advance()
+    }
+    req.watchdog = watchdog
+    watchdogHandler.postDelayed(watchdog, timeoutMs)
   }
 
   private fun start(req: Request) {
@@ -163,6 +201,12 @@ class ExpoTtsFileModule : Module() {
     // "platform default", not "whatever the previous request happened to use".
     engine.setSpeechRate(req.options.rate?.toFloat() ?: 1.0f)
     engine.setPitch(req.options.pitch?.toFloat() ?: 1.0f)
+
+    // Armed before the engine is handed the text rather than after it accepts it: this
+    // runs while [queueLock] is held, so no callback can settle the request in between,
+    // and an engine that accepts the text and then says nothing is covered from the
+    // start.
+    armWatchdogLocked(req)
 
     val result = engine.synthesizeToFile(req.text, Bundle(), req.file, req.utteranceId)
     if (result != TextToSpeech.SUCCESS) {
@@ -199,10 +243,23 @@ class ExpoTtsFileModule : Module() {
     }
   }
 
+  /**
+   * Claim the in-flight request if [utteranceId] identifies it, so exactly one of the
+   * engine callback and the watchdog settles it — the other gets null and stops there.
+   *
+   * Null is also what an unrecognized id gets: a callback arriving for a request that
+   * already timed out, or a second callback for one already done, refers to something
+   * the queue has moved past and must not disturb whatever is running now. The watchdog,
+   * not this check, is what keeps an unrecognized id from stalling the queue.
+   */
   private fun takeCurrent(utteranceId: String?): Request? {
     synchronized(queueLock) {
       val req = current
-      return if (req != null && req.utteranceId == utteranceId) req else null
+      if (req == null || req.utteranceId != utteranceId) {
+        return null
+      }
+      clearCurrentLocked()
+      return req
     }
   }
 
@@ -222,5 +279,12 @@ class ExpoTtsFileModule : Module() {
     quality >= android.speech.tts.Voice.QUALITY_VERY_HIGH -> "premium"
     quality >= android.speech.tts.Voice.QUALITY_HIGH -> "enhanced"
     else -> "default"
+  }
+
+  companion object {
+    // Far above what any synthesis the engine would have completed takes — it caps its
+    // own input at getMaxSpeechInputLength() characters — and short enough that an app
+    // recovers within the session instead of at the next launch.
+    private const val DEFAULT_TIMEOUT_MS = 60_000L
   }
 }

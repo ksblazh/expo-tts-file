@@ -32,6 +32,21 @@ export type SynthesizeOptions = {
    * Android ignores this field (combining stress marks work there natively).
    */
   ipa?: string;
+  /**
+   * Watchdog for an engine that never reports back, in milliseconds; default `60000`.
+   * After this long without a result the promise rejects with `ERR_TTS_TIMEOUT` instead
+   * of staying pending for the life of the app — and on Android the requests queued
+   * behind it start running again, which otherwise takes an app restart.
+   *
+   * This is a recovery path, not a deadline for slow synthesis: a value that fires while
+   * the engine is still working turns a request that would have succeeded into a
+   * failure. Raise it for long texts rather than lowering it to fail fast.
+   *
+   * Applies to the file paths only. The live `speak*` functions ignore it — their
+   * recovery is {@link stopLiveSpeech}, and speech has no expected duration to time out
+   * against.
+   */
+  timeoutMs?: number;
 };
 
 /** One run of a mixed utterance: plain text, or text pronounced per its `ipa`. */
