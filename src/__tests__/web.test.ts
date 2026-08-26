@@ -24,4 +24,10 @@ describe('web stub', () => {
   it('getVoices resolves to an empty list instead of throwing', async () => {
     await expect(WebModule.getVoices()).resolves.toEqual([]);
   });
+
+  it('the cache functions report an empty cache rather than throwing', async () => {
+    await expect(WebModule.getCacheSize()).resolves.toBe(0);
+    await expect(WebModule.clearCache()).resolves.toBe(0);
+    await expect(WebModule.deleteFile('file:///whatever')).resolves.toBeUndefined();
+  });
 });

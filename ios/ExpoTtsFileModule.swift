@@ -157,8 +157,15 @@ public class ExpoTtsFileModule: Module {
     }
 
     AsyncFunction("getVoices") { (language: String?) -> [[String: Any]] in
+      // Compared lower-cased: BCP-47 is case-insensitive, and the region subtag is
+      // conventionally upper-case, so a caller passing "RU" or "en-us" was previously
+      // told no such voice exists.
+      let prefix = language?.lowercased()
       return AVSpeechSynthesisVoice.speechVoices()
-        .filter { language == nil || $0.language.hasPrefix(language!) }
+        .filter { voice in
+          guard let prefix else { return true }
+          return voice.language.lowercased().hasPrefix(prefix)
+        }
         .map { voice in
           [
             "identifier": voice.identifier,
@@ -167,6 +174,46 @@ public class ExpoTtsFileModule: Module {
             "quality": ExpoTtsFileModule.qualityString(voice.quality),
           ]
         }
+    }
+
+    // The module's only output is files and nothing else removes them, so it owns the
+    // three operations over its own directory. Deliberately NOT a general file API:
+    // deleting anything else is `expo-file-system`'s job, and confining these keeps the
+    // worst case at "deleted a clip", which re-synthesizing undoes.
+    AsyncFunction("deleteFile") { (uri: String, promise: Promise) in
+      guard let file = Self.cacheFileURL(uri) else {
+        promise.reject(
+          "ERR_TTS_FOREIGN_FILE",
+          "\(uri) was not written by expo-tts-file. Delete other files with expo-file-system."
+        )
+        return
+      }
+      do {
+        // Already gone is success, not failure: the OS evicts the caches directory under
+        // storage pressure, so a missing file is the state the caller asked for.
+        if FileManager.default.fileExists(atPath: file.path) {
+          try FileManager.default.removeItem(at: file)
+        }
+        promise.resolve(nil)
+      } catch {
+        promise.reject("ERR_TTS_FILE", "Could not delete \(uri): \(error.localizedDescription)")
+      }
+    }
+
+    AsyncFunction("clearCache") { () -> Int in
+      let manager = FileManager.default
+      // Counts what actually went, not what was attempted.
+      return Self.cacheFiles().reduce(into: 0) { removed, url in
+        if (try? manager.removeItem(at: url)) != nil {
+          removed += 1
+        }
+      }
+    }
+
+    AsyncFunction("getCacheSize") { () -> Int in
+      return Self.cacheFiles().reduce(into: 0) { total, url in
+        total += (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+      }
     }
   }
 
@@ -348,11 +395,46 @@ public class ExpoTtsFileModule: Module {
     }
   }
 
-  private static func outputFileURL() throws -> URL {
+  private static func cacheDirectoryURL() throws -> URL {
     let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
     let dir = caches.appendingPathComponent("expo-tts-file", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir.appendingPathComponent("tts-\(UUID().uuidString).caf")
+    return dir
+  }
+
+  private static func outputFileURL() throws -> URL {
+    return try cacheDirectoryURL().appendingPathComponent("tts-\(UUID().uuidString).caf")
+  }
+
+  /// The file `uri` names, or nil if this module did not write it.
+  ///
+  /// Symlinks and `..` are resolved BEFORE the comparison, so a path that merely looks
+  /// contained does not pass. The parent directory is compared rather than a string
+  /// prefix — a prefix test would also accept a sibling directory whose name happens to
+  /// start the same way, and the module writes flat into one directory anyway.
+  private static func cacheFileURL(_ uri: String) -> URL? {
+    guard let url = URL(string: uri), url.isFileURL,
+          let dir = try? cacheDirectoryURL() else {
+      return nil
+    }
+    let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+    let root = dir.standardizedFileURL.resolvingSymlinksInPath()
+    // Compared as paths, not as URLs: the directory URL carries a trailing slash and the
+    // one from deletingLastPathComponent() may not, which would make every file look
+    // foreign. `path` normalizes that away.
+    return resolved.deletingLastPathComponent().path == root.path ? resolved : nil
+  }
+
+  private static func cacheFiles() -> [URL] {
+    guard let dir = try? cacheDirectoryURL() else {
+      return []
+    }
+    let contents = try? FileManager.default.contentsOfDirectory(
+      at: dir,
+      includingPropertiesForKeys: [.fileSizeKey],
+      options: [.skipsHiddenFiles]
+    )
+    return contents ?? []
   }
 
   private static func qualityString(_ quality: AVSpeechSynthesisVoiceQuality) -> String {

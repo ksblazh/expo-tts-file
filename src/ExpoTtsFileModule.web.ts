@@ -19,6 +19,20 @@ class ExpoTtsFileModule extends NativeModule<Record<string, never>> {
   async getVoices(_language?: string): Promise<Voice[]> {
     return [];
   }
+
+  // The cache is empty on web because nothing ever writes to it — `synthesizeToFile`
+  // throws here, so no caller can hold a URI to delete. These report that truthfully
+  // instead of throwing, which keeps cross-platform cleanup code free of a Platform
+  // check.
+  async deleteFile(_uri: string): Promise<void> {}
+
+  async clearCache(): Promise<number> {
+    return 0;
+  }
+
+  async getCacheSize(): Promise<number> {
+    return 0;
+  }
 }
 
 export default registerWebModule(ExpoTtsFileModule, 'ExpoTtsFileModule');
