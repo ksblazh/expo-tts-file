@@ -13,13 +13,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-      # trusted publishing needs a current npm (OIDC token exchange)
-      - run: npm install -g npm@latest
+      # Trusted publishing needs a current npm for the OIDC token exchange, but the major
+      # is pinned rather than tracked: `npm@latest` silently moved to 12, whose
+      # `pack --json` output changed shape, and the packaging check that reads it would
+      # have failed here alone while every other job stayed green. Raise this deliberately
+      # and let the release rehearsal (`workflow_dispatch`) prove the new major first.
+      - run: npm install -g npm@12
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run lint -- --max-warnings 0

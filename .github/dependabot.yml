@@ -1,0 +1,52 @@
+# Dependabot exists here mainly for the actions: this repository sat three majors behind
+# on every one of them without anything saying so, because nothing breaks when an action
+# goes stale — it just quietly runs on an unsupported runtime until it doesn't.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  # The module's own toolchain. Expo, React and React Native are deliberately excluded
+  # from major bumps: an SDK migration is a decision with a device-verification step
+  # attached, not something to merge from a bot. Minor and patch updates are welcome.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: expo
+        update-types: [version-update:semver-major]
+      - dependency-name: react
+        update-types: [version-update:semver-major]
+      - dependency-name: react-native
+        update-types: [version-update:semver-major]
+
+  # The demo app. It is what the iOS and Android CI jobs actually build, so letting it rot
+  # would eventually break those rather than the published package.
+  - package-ecosystem: npm
+    directory: /example
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      example:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: expo
+        update-types: [version-update:semver-major]
+      - dependency-name: react
+        update-types: [version-update:semver-major]
+      - dependency-name: react-native
+        update-types: [version-update:semver-major]
