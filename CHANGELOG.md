@@ -3,6 +3,45 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `SynthesisResult.marks` — word-level timings returned with the synthesized file, as
+  `{ start, end, timeMs }` per reported range. Enough to highlight each word as the file
+  plays, which is what the module exists for and what no comparable package offers.
+
+  The ranges are reported by the engine *during rendering*, long before playback, so a
+  raw range says nothing about when to highlight; each one is stamped with the audio
+  produced so far, which converts it into a playback timestamp. Because the timings come
+  back with the file instead of arriving as events, they survive caching, seeking and
+  replay — a clip synthesized today still highlights correctly when played from the cache
+  next week.
+
+  `start` and `end` count UTF-16 code units, matching how JavaScript indexes strings, so
+  they slice the input text directly rather than carrying the spoken substrings — which
+  also keeps a repeated word unambiguous. The array is empty when the engine reports no
+  ranges (Android engines are not required to implement this, and none do below API 26);
+  that is a missing capability, not a failure.
+
+  One Android quirk is handled rather than documented away: the platform specifies
+  `onRangeStart(utteranceId, start, end, frame)`, and a shipping engine was observed
+  delivering `(frame, start, end)` instead — a frame counter arriving where a character
+  offset belongs, which renders as the passage printed twice. Both orders now produce the
+  same marks, decided per utterance by which reading walks forward through the text
+  without overlapping; numbers that fit neither are discarded with a warning rather than
+  reported as ranges.
+
+### Changed
+- The version guard now also covers `package-lock.json`, which states the version twice.
+  It knew three of the five declarations, and the 0.2.3 bump nearly shipped with the
+  lockfile behind.
+- `release.yml` pins npm to a major instead of installing `@latest`. That line is how a
+  release breaks while CI stays green: npm 12 changed the shape of `npm pack --json`, and
+  only the release job reads it.
+- Every GitHub action was three majors behind and is now current; Dependabot is set up so
+  that stops recurring, with major bumps of `expo`, `react` and `react-native` excluded —
+  an SDK migration is a decision with device verification attached.
+
 ## [0.2.3] — 2026-08-26
 
 ### Fixed

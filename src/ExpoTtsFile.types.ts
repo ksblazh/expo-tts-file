@@ -55,11 +55,38 @@ export type SpeechSegment = {
   ipa?: string;
 };
 
+/**
+ * One reported range of the input text, and when it is spoken in the produced audio.
+ *
+ * `start` and `end` index the text you passed in, counted in UTF-16 code units — the same
+ * units JavaScript strings use, so `text.slice(start, end)` is the spoken word. For
+ * {@link synthesizeMixedToFile} they index the segments' `text` values concatenated in
+ * order.
+ */
+export type SpeechMark = {
+  /** Index of the first character of the range. */
+  start: number;
+  /** Index just past the last character of the range. */
+  end: number;
+  /** Milliseconds from the start of the audio at which this range begins. */
+  timeMs: number;
+};
+
 export type SynthesisResult = {
   /** `file://` URI of the synthesized audio in the app cache directory. */
   uri: string;
   /** Duration of the produced audio, in milliseconds. */
   durationMs: number;
+  /**
+   * Word-level timings for the produced audio, in report order — the data a caller needs
+   * to highlight text while the file plays.
+   *
+   * **Empty when the engine does not report ranges**, which is not an error: Android TTS
+   * engines are not required to implement it (and never do below API 26), and a voice may
+   * simply not provide it. Treat an empty array as "no highlighting available" rather
+   * than as a failure, and check it before building a UI that depends on it.
+   */
+  marks: SpeechMark[];
 };
 
 export type VoiceQuality = 'default' | 'enhanced' | 'premium';

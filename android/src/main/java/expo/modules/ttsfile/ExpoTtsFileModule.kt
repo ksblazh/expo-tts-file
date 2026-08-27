@@ -1,6 +1,8 @@
 package expo.modules.ttsfile
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
@@ -8,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -52,7 +55,21 @@ class ExpoTtsFileModule : Module() {
   ) {
     /** Recovery timer, disarmed by whichever settles the request first. */
     var watchdog: Runnable? = null
+
+    /** Ranges the engine reported while rendering; guarded by [queueLock]. */
+    val marks = mutableListOf<RawRange>()
   }
+
+  /**
+   * The three integers `onRangeStart` delivered, kept unlabelled on purpose.
+   *
+   * The platform documents them as (start, end, frame), and at least one shipping engine
+   * delivers (frame, start, end) instead — device-verified on a Pixel, 2026-08-27, where
+   * the second argument counted audio frames while the third held character offsets.
+   * Which reading is right cannot be decided per callback, so it is decided per utterance
+   * in [marksOf] against the text they must describe.
+   */
+  private class RawRange(val first: Int, val second: Int, val third: Int)
 
   private val context: Context
     get() = appContext.reactContext?.applicationContext
@@ -252,12 +269,33 @@ class ExpoTtsFileModule : Module() {
   private val progressListener = object : UtteranceProgressListener() {
     override fun onStart(utteranceId: String?) {}
 
+    // Word-level timing: a range of the utterance text and the audio frame at which it is
+    // spoken, which is what makes the range usable during PLAYBACK rather than during
+    // synthesis. Deliberately does not claim the request the way the settling callbacks
+    // do — it fires many times per utterance and the request has to stay in flight.
+    //
+    // The parameters are named for the documented contract and then stored UNLABELLED,
+    // because one shipping engine does not honour it (see [RawRange]). [marksOf] decides
+    // which reading the numbers actually support.
+    //
+    // Added in API 26. On 24 and 25 the framework never calls it, which is the same
+    // outcome as an engine that does not supply ranges.
+    override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+      synchronized(queueLock) {
+        val req = current
+        if (req != null && req.utteranceId == utteranceId) {
+          req.marks.add(RawRange(start, end, frame))
+        }
+      }
+    }
+
     override fun onDone(utteranceId: String?) {
       val req = takeCurrent(utteranceId) ?: return
       req.promise.resolve(
         mapOf(
           "uri" to Uri.fromFile(req.file).toString(),
-          "durationMs" to durationOf(req.file)
+          "durationMs" to durationOf(req.file),
+          "marks" to marksOf(req)
         )
       )
       advance()
@@ -318,6 +356,99 @@ class ExpoTtsFileModule : Module() {
       val file = File(path).canonicalFile
       if (file.parentFile == cacheDir.canonicalFile) file else null
     }.getOrNull()
+  }
+
+  /**
+   * The collected ranges as `[{start, end, timeMs}]`, in report order.
+   *
+   * Frames become milliseconds through the file's own sample rate, so an engine that
+   * renders at an unexpected rate still lands on the right timestamps. Returns empty
+   * rather than guessing when the rate cannot be read or the engine reported nothing —
+   * `start`/`end` count UTF-16 code units, which is also how JavaScript indexes strings.
+   */
+  private fun marksOf(req: Request): List<Map<String, Int>> {
+    if (req.marks.isEmpty()) {
+      return emptyList()
+    }
+    val sampleRate = sampleRateOf(req.file)
+    if (sampleRate <= 0) {
+      return emptyList()
+    }
+
+    // Two readings of the same three numbers. Whichever describes the text coherently is
+    // the right one; the documented order wins a tie, so a conforming engine is never
+    // second-guessed.
+    val documented = req.marks.map { Triple(it.first, it.second, it.third) }
+    val shifted = req.marks.map { Triple(it.second, it.third, it.first) }
+    val chosen = when {
+      describesText(documented, req.text.length) -> documented
+      describesText(shifted, req.text.length) -> {
+        Log.w(
+          "ExpoTtsFile",
+          "This TTS engine reports onRangeStart as (frame, start, end); the platform " +
+            "documents (start, end, frame). Reading the ranges in the order the numbers fit."
+        )
+        shifted
+      }
+      else -> {
+        Log.w(
+          "ExpoTtsFile",
+          "Discarding ${req.marks.size} speech ranges: neither argument order describes " +
+            "the ${req.text.length}-character utterance. Reporting no marks."
+        )
+        return emptyList()
+      }
+    }
+
+    return chosen.map { (start, end, frame) ->
+      mapOf(
+        "start" to start,
+        "end" to end,
+        // Long on purpose: frames * 1000 overflows Int a few minutes into an utterance.
+        "timeMs" to (frame.toLong() * 1000L / sampleRate).toInt()
+      )
+    }
+  }
+
+  /**
+   * Whether these (start, end, frame) triples can describe [length] characters of text.
+   *
+   * Bounds alone do not separate the two candidate orders — on a conforming engine the
+   * wrong reading also lands inside a long text. What separates them is that real ranges
+   * walk forward through the text without overlapping: read the wrong way round, the
+   * "ranges" leap over each other immediately.
+   */
+  private fun describesText(ranges: List<Triple<Int, Int, Int>>, length: Int): Boolean {
+    var previousEnd = 0
+    for ((start, end, frame) in ranges) {
+      if (frame < 0 || start < previousEnd || end <= start || end > length) {
+        return false
+      }
+      previousEnd = end
+    }
+    return true
+  }
+
+  private fun sampleRateOf(file: File): Int {
+    val extractor = MediaExtractor()
+    return try {
+      extractor.setDataSource(file.absolutePath)
+      if (extractor.trackCount == 0) {
+        0
+      } else {
+        val format = extractor.getTrackFormat(0)
+        // getInteger(key, default) only exists from API 29.
+        if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+          format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        } else {
+          0
+        }
+      }
+    } catch (e: Exception) {
+      0
+    } finally {
+      extractor.release()
+    }
   }
 
   private fun durationOf(file: File): Int {
