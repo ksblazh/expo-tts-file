@@ -9,6 +9,16 @@ On-device **text-to-speech synthesized to an audio file** for React Native / Exp
 
 Built with the [Expo Modules API](https://docs.expo.dev/modules/) (Swift + Kotlin).
 
+<!-- Absolute URL on purpose: docs/ is not in the published tarball, so a relative path
+     would render as a broken image on npmjs.com. -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ksblazh/expo-tts-file/main/docs/demo.gif"
+       alt="Generating an audio file, then playing it back with each word highlighted in time with the speech"
+       width="360">
+</p>
+
+Recorded on a device: synthesize to a file, play it, and highlight each word as it is spoken — from the timings that come back with the file, so replaying and seeking stay in sync.
+
 > Why: `expo-speech` speaks live but can't produce a file, and live speech can't play while the app is backgrounded / the screen is locked. Synthesizing to a file lets you play vocabulary, articles, or any text as a real audio stream — including in the background, like a podcast.
 
 ## Platforms
