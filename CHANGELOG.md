@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.4] — 2026-08-27
 
 ### Added
 - `SynthesisResult.marks` — word-level timings returned with the synthesized file, as
