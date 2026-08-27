@@ -37,7 +37,7 @@ beforeEach(() => {
 
 describe('delegation to the native module', () => {
   it('synthesizeToFile passes args through and resolves the native result', async () => {
-    const result = { uri: 'file:///cache/tts.caf', durationMs: 1234 };
+    const result = { uri: 'file:///cache/tts.caf', durationMs: 1234, marks: [] };
     native.synthesizeToFile.mockResolvedValue(result);
 
     await expect(synthesizeToFile('hello', { language: 'en-US', rate: 1.2 })).resolves.toBe(result);
@@ -45,7 +45,7 @@ describe('delegation to the native module', () => {
   });
 
   it('synthesizeMixedToFile passes segments through', async () => {
-    const result = { uri: 'file:///cache/tts.caf', durationMs: 42 };
+    const result = { uri: 'file:///cache/tts.caf', durationMs: 42, marks: [] };
     native.synthesizeMixedToFile.mockResolvedValue(result);
     const segments = [{ text: 'privet, ' }, { text: 'zamok', ipa: 'zɐˈmok' }];
 
@@ -75,12 +75,46 @@ describe('delegation to the native module', () => {
   });
 
   it('synthesizeToFile forwards timeoutMs rather than consuming it', async () => {
-    native.synthesizeToFile.mockResolvedValue({ uri: 'file:///cache/tts.caf', durationMs: 1 });
+    native.synthesizeToFile.mockResolvedValue({
+      uri: 'file:///cache/tts.caf',
+      durationMs: 1,
+      marks: [],
+    });
 
     await synthesizeToFile('hello', { language: 'en-US', timeoutMs: 5000 });
     expect(native.synthesizeToFile).toHaveBeenCalledWith('hello', {
       language: 'en-US',
       timeoutMs: 5000,
+    });
+  });
+
+  it('speech marks arrive as the native layer reported them', async () => {
+    const marks = [
+      { start: 0, end: 5, timeMs: 0 },
+      { start: 6, end: 11, timeMs: 420 },
+    ];
+    native.synthesizeToFile.mockResolvedValue({
+      uri: 'file:///cache/tts.caf',
+      durationMs: 900,
+      marks,
+    });
+
+    const result = await synthesizeToFile('hello world', { language: 'en-US' });
+    expect(result.marks).toBe(marks);
+    // Indices are UTF-16 code units, so they slice the input string directly — the whole
+    // reason they are returned as offsets rather than as the spoken substrings.
+    expect('hello world'.slice(marks[1].start, marks[1].end)).toBe('world');
+  });
+
+  it('an engine that reports no ranges yields an empty list, not a failure', async () => {
+    native.synthesizeToFile.mockResolvedValue({
+      uri: 'file:///cache/tts.wav',
+      durationMs: 700,
+      marks: [],
+    });
+
+    await expect(synthesizeToFile('hello', { language: 'en-US' })).resolves.toMatchObject({
+      marks: [],
     });
   });
 

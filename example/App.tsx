@@ -1,25 +1,27 @@
 import Constants from 'expo-constants';
-import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import {
   clearCache,
   deleteFile,
   getCacheSize,
   getVoices,
   synthesizeToFile,
+  type SpeechMark,
   type SynthesisResult,
   type Voice,
 } from 'expo-tts-file';
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-// Long enough to start playback and then background the app / lock the screen
-// to verify audio keeps playing.
+// Long enough to start playback and then background the app or lock the screen to verify
+// that audio keeps playing. No dashes: they add nothing here, some engines read them as an
+// odd pause, and plain sentences are easier to follow when the words light up one by one.
 const DEFAULT_TEXT =
   'This is a background audio test for the expo-tts-file module. ' +
   'Edit this text, optionally pick a voice in another language below, then generate and play it. ' +
-  'A longer passage like this one lets you start playback, send the app to the background or lock ' +
-  'the screen, and confirm the audio keeps playing. The quick brown fox jumps over the lazy dog — ' +
-  'again and again — until you are satisfied that on-device text-to-speech to a file works end to end.';
+  'A passage of this length lets you start playback, send the app to the background or lock the ' +
+  'screen, and confirm that the audio keeps going. The quick brown fox jumps over the lazy dog, ' +
+  'again and again, until you are satisfied that on-device text to speech works end to end.';
 
 export default function App() {
   const [text, setText] = useState(DEFAULT_TEXT);
@@ -32,8 +34,75 @@ export default function App() {
   const [watchdogLog, setWatchdogLog] = useState<string[]>([]);
   const [cacheLog, setCacheLog] = useState<string[]>([]);
   const [cacheSize, setCacheSize] = useState<number | null>(null);
+  const [spokenText, setSpokenText] = useState('');
 
-  const player = useAudioPlayer(result?.uri ?? undefined);
+  // The player reports its own state, so nothing below infers it. Every earlier attempt to
+  // derive "playing" and "finished" from a polled clock was wrong in a different way:
+  // seeking is asynchronous, so a fresh reading can still describe the previous position,
+  // and a threshold cannot tell a paused clip from a finished one. 50 ms because the
+  // default 500 is far too coarse to light words up in time.
+  const player = useAudioPlayer(result?.uri ?? undefined, { updateInterval: 50 });
+  const status = useAudioPlayerStatus(player);
+  const marks = result?.marks ?? [];
+  const positionMs = Math.round((status.currentTime ?? 0) * 1000);
+  const playing = status.playing;
+
+  // Rewind the moment the clip ends rather than when Play is next pressed. `didJustFinish`
+  // is the player's own signal; inferring it from the playhead is what produced a Play
+  // button needing two presses. The progress bar returning to zero and the highlight going
+  // out both fall out of the position being 0 again — no separate bookkeeping.
+  useEffect(() => {
+    if (status.didJustFinish) {
+      // Paused BEFORE the rewind, and not only for tidiness: Android leaves the player
+      // ready to play when it reaches the end, so seeking back to zero there resumes it
+      // and the clip loops. iOS has already stopped by this point, where the extra pause
+      // does nothing.
+      player.pause();
+      player.seekTo(0);
+    }
+  }, [status.didJustFinish, player]);
+
+  // The mark that has started most recently — marks arrive in order, so the last one at
+  // or before the playhead is the word being spoken. Nothing is lit while the clip sits at
+  // the start; a pause deliberately keeps the current word lit.
+  const activeMark = useMemo(() => {
+    if (!playing && positionMs === 0) {
+      return null;
+    }
+    let current: SpeechMark | null = null;
+    for (const mark of marks) {
+      if (mark.timeMs > positionMs) {
+        break;
+      }
+      current = mark;
+    }
+    return current;
+  }, [marks, positionMs, playing]);
+
+  // Built as a list of Text children rather than raw strings interleaved with an element:
+  // Android renders the uniform shape predictably, and the mixed one did not.
+  //
+  // The highlight runs to where the NEXT mark begins rather than to where this one ends.
+  // Engines tokenize as they please — Apple reports "expo-tts" and leaves "-file" out of
+  // any range — so painting only the reported span leaves holes over hyphens and
+  // punctuation. Sweeping to the next word covers them and reads as continuous. This is a
+  // rendering choice; the marks themselves stay exactly as the engine reported them.
+  const parts = useMemo(() => {
+    if (!activeMark) {
+      return [{ key: 'all', text: spokenText, active: false }];
+    }
+    const next = marks[marks.indexOf(activeMark) + 1];
+    const highlightEnd = Math.max(activeMark.end, next ? next.start : activeMark.end);
+    return [
+      { key: 'before', text: spokenText.slice(0, activeMark.start), active: false },
+      {
+        key: 'active',
+        text: spokenText.slice(activeMark.start, highlightEnd),
+        active: true,
+      },
+      { key: 'after', text: spokenText.slice(highlightEnd), active: false },
+    ].filter((part) => part.text.length > 0);
+  }, [activeMark, marks, spokenText]);
 
   useEffect(() => {
     setAudioModeAsync({
@@ -72,12 +141,27 @@ export default function App() {
         rate: 1.0,
         ...(voice ? { voice: voice.identifier } : {}),
       });
+      setSpokenText(text);
       setResult(res);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function play() {
+    // Only Replay rewinds: a finished clip was rewound when it ended, a paused one should
+    // resume in place, and a fresh one is already at zero. The seek is awaited because it
+    // is asynchronous — starting before it lands just replays the end.
+    if (playing) {
+      await player.seekTo(0);
+    }
+    player.play();
+  }
+
+  function pause() {
+    player.pause();
   }
 
   // Device check for the synthesis watchdog. A request with an impossibly short
@@ -126,6 +210,7 @@ export default function App() {
   async function deleteCurrent() {
     await removeCurrent();
     setResult(null);
+    setSpokenText('');
     await refreshCacheSize();
   }
 
@@ -192,25 +277,63 @@ export default function App() {
         <Text style={styles.header}>expo-tts-file</Text>
 
         <Group name="Generate & play">
+          <Text style={styles.hint}>
+            Synthesizes to a file, then plays it while highlighting each word as it is
+            spoken — driven by the timings returned with the file, not by live events.
+          </Text>
           <Button title={busy ? 'Generating…' : 'Generate'} onPress={generate} disabled={busy} />
           {result && (
             <View style={styles.output}>
               <Text selectable style={styles.mono}>
                 uri: {result.uri}
               </Text>
-              <Text>durationMs: {result.durationMs}</Text>
+              <Text>
+                durationMs: {result.durationMs} · marks: {marks.length}
+              </Text>
+
+              <Text style={styles.karaoke}>
+                {parts.map((part) => (
+                  <Text key={part.key} style={part.active ? styles.karaokeActive : undefined}>
+                    {part.text}
+                  </Text>
+                ))}
+              </Text>
+
+              <View style={styles.track}>
+                <View
+                  style={[
+                    styles.trackFill,
+                    {
+                      width: `${
+                        result.durationMs > 0
+                          ? Math.min(100, (positionMs / result.durationMs) * 100)
+                          : 0
+                      }%`,
+                    },
+                  ]}
+                />
+              </View>
+
               <View style={styles.row}>
                 <Button
-                  title="▶ Play"
-                  onPress={() => {
-                    player.seekTo(0);
-                    player.play();
-                  }}
+                  title={
+                    playing ? '↻ Replay' : positionMs > 0 ? '▶ Resume' : '▶ Play'
+                  }
+                  onPress={play}
                 />
-                <Button title="⏸ Pause" onPress={() => player.pause()} />
+                <Button title="⏸ Pause" onPress={pause} disabled={!playing} />
                 <Button title="🗑 Delete" onPress={deleteCurrent} />
               </View>
-              <Text style={styles.hint}>Tip: Play, then background the app / lock the screen — audio should keep going.</Text>
+
+              {marks.length === 0 && (
+                <Text style={styles.hint}>
+                  This engine reports no ranges, so there is nothing to highlight — see the
+                  README on when `marks` comes back empty.
+                </Text>
+              )}
+              <Text style={styles.hint}>
+                Tip: Play, then background the app / lock the screen — audio should keep going.
+              </Text>
             </View>
           )}
         </Group>
@@ -306,6 +429,10 @@ function Group(props: { name: string; children: React.ReactNode }) {
   );
 }
 
+// One accent for everything that marks progress or selection, in the same blue family as
+// the buttons and the selected voice row.
+const ACCENT = '#1a73e8';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#eee' },
   content: { paddingBottom: 40 },
@@ -321,6 +448,12 @@ const styles = StyleSheet.create({
   output: { marginTop: 14, padding: 10, backgroundColor: '#f3f3f3', borderRadius: 6 },
   row: { flexDirection: 'row', gap: 12, marginTop: 10, flexWrap: 'wrap' },
   mono: { fontSize: 11 },
+  // No lineHeight and no backgroundColor on the highlight: that pair makes nested Text
+  // overlap its own lines on Android.
+  track: { height: 4, marginTop: 14, backgroundColor: '#dcdcdc', borderRadius: 2, overflow: 'hidden' },
+  trackFill: { height: 4, backgroundColor: ACCENT },
+  karaoke: { marginTop: 12, fontSize: 16 },
+  karaokeActive: { color: ACCENT, fontWeight: '700' },
   pass: { marginTop: 8, color: '#0a7d28' },
   fail: { marginTop: 8, color: '#b00020' },
   error: { marginHorizontal: 20, color: '#b00020' },

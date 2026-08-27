@@ -78,8 +78,14 @@ type SynthesizeOptions = {
   timeoutMs?: number; // watchdog for a stuck engine, default 60000 (see below)
 };
 
+type SpeechMark = {
+  start: number;      // index into the input text, UTF-16 code units (as in JS)
+  end: number;
+  timeMs: number;     // when this range is spoken, from the start of the audio
+};
+
 synthesizeToFile(text: string, options: SynthesizeOptions):
-  Promise<{ uri: string; durationMs: number }>
+  Promise<{ uri: string; durationMs: number; marks: SpeechMark[] }>
 
 getVoices(language?: string): Promise<Array<{
   identifier: string;
@@ -94,7 +100,7 @@ getCacheSize(): Promise<number>          // bytes
 
 // iOS only (see the platform table):
 synthesizeMixedToFile(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions):
-  Promise<{ uri: string; durationMs: number }>
+  Promise<{ uri: string; durationMs: number; marks: SpeechMark[] }>
 speakIpa(text: string, options: SynthesizeOptions): Promise<boolean>
 speakMixed(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions): Promise<boolean>
 speakSsml(ssml: string, options: SynthesizeOptions): Promise<boolean>   // iOS 16+
@@ -121,6 +127,34 @@ measure against; `stopLiveSpeech()` is the way out of those.
 
 The live `speak*` functions resolve `true` when the utterance finished and `false` when
 it was cancelled — by `stopLiveSpeech` or by a newer utterance.
+
+### Highlighting words while the file plays
+
+`marks` comes back with the file: each entry is a range of your input text and the
+millisecond at which that range is spoken. The engine reports the ranges *while it
+renders*, long before anything plays; pairing each one with the audio produced so far is
+what turns it into a playback timestamp, and that is what the module does for you.
+
+```ts
+const { uri, marks } = await synthesizeToFile(text, { language: 'en-US' });
+
+// …later, during playback, at position `ms`:
+const spoken = marks.filter((m) => m.timeMs <= ms).at(-1);
+const word = spoken && text.slice(spoken.start, spoken.end);
+```
+
+`start` and `end` count UTF-16 code units, which is how JavaScript indexes strings too, so
+they slice the input directly — no conversion, and no ambiguity when a word repeats. For
+`synthesizeMixedToFile` they index the segments' `text` values concatenated in order.
+
+Because the timings travel with the file rather than arriving as events, they survive
+caching, seeking, pausing and replaying — the file synthesized today still highlights
+correctly when it is played from the cache next week.
+
+**`marks` can be empty, and that is not an error.** Android TTS engines are not required
+to report ranges, and the callback that carries them does not exist below API 26; a
+particular voice may not report them either. Check the array before building a UI that
+depends on it, and fall back to plain text rather than treating it as a failure.
 
 Files are written to `<app cache>/expo-tts-file/tts-<uuid>.{caf,wav}` — on iOS the app's
 `Library/Caches`, on Android `context.cacheDir`. Nothing is deleted for you, so keep your

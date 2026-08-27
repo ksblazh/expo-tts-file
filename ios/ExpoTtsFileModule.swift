@@ -50,6 +50,90 @@ private class LiveSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
   }
 }
 
+// Frames rendered so far, plus the character ranges collected against them. The buffer
+// callback and the delegate's range callback are not documented to run on the same queue,
+// so both go through one lock rather than sharing a captured variable.
+//
+// Stamping a range with the frame count AT THE MOMENT IT IS REPORTED is the whole trick:
+// write() reports ranges as it renders, long before anything is played, so the range on
+// its own says nothing about when to highlight. Paired with the frames already produced,
+// it becomes a playback timestamp.
+private final class RenderProgress {
+  private let lock = NSLock()
+  private var frames: AVAudioFramePosition = 0
+  private var collected: [(range: NSRange, frame: AVAudioFramePosition)] = []
+
+  func advance(by count: AVAudioFrameCount) {
+    lock.lock()
+    defer { lock.unlock() }
+    frames += AVAudioFramePosition(count)
+  }
+
+  func mark(_ range: NSRange) {
+    lock.lock()
+    defer { lock.unlock() }
+    collected.append((range, frames))
+  }
+
+  var totalFrames: AVAudioFramePosition {
+    lock.lock()
+    defer { lock.unlock() }
+    return frames
+  }
+
+  /// `[["start": Int, "end": Int, "timeMs": Int]]`, in report order.
+  ///
+  /// NSRange counts UTF-16 code units, which is also how JavaScript indexes strings, so
+  /// these cross the bridge as usable `text.slice(start, end)` bounds without conversion.
+  func marks(sampleRate: Double) -> [[String: Any]] {
+    lock.lock()
+    defer { lock.unlock() }
+    guard sampleRate > 0 else { return [] }
+    return collected.map { entry in
+      [
+        "start": entry.range.location,
+        "end": entry.range.location + entry.range.length,
+        "timeMs": Int(Double(entry.frame) / sampleRate * 1000.0),
+      ]
+    }
+  }
+}
+
+// Relays the ranges the synthesizer reports while rendering into a RenderProgress.
+// AVSpeechSynthesizer holds `delegate` weakly, so whoever installs one of these must keep
+// a strong reference for the lifetime of the write.
+private class MarkCollector: NSObject, AVSpeechSynthesizerDelegate {
+  private let progress: RenderProgress
+
+  init(progress: RenderProgress) {
+    self.progress = progress
+  }
+
+  /// Reading the marks through the collector is what keeps it alive: see the note where
+  /// it is installed.
+  func marks(sampleRate: Double) -> [[String: Any]] {
+    return progress.marks(sampleRate: sampleRate)
+  }
+
+  func speechSynthesizer(
+    _ synthesizer: AVSpeechSynthesizer,
+    willSpeakRangeOfSpeechString characterRange: NSRange,
+    utterance: AVSpeechUtterance
+  ) {
+    // A range that does not fall inside the spoken text is dropped rather than passed on.
+    // Android's equivalent callback turned out to deliver its arguments in an order the
+    // documentation did not imply, which shipped frame counters as character offsets; the
+    // same class of mistake degrades to "no marks" here instead of to nonsense.
+    let length = utterance.speechString.utf16.count
+    guard characterRange.location >= 0,
+          characterRange.length > 0,
+          characterRange.location + characterRange.length <= length else {
+      return
+    }
+    progress.mark(characterRange)
+  }
+}
+
 public class ExpoTtsFileModule: Module {
   // Synthesizers are retained for the duration of a write() so they are not
   // deallocated mid-synthesis (the buffer callback would then never complete).
@@ -280,8 +364,15 @@ public class ExpoTtsFileModule: Module {
     DispatchQueue.main.async { self.active.insert(synthesizer) }
 
     var audioFile: AVAudioFile?
-    var totalFrames: AVAudioFramePosition = 0
     var sampleRate: Double = 0
+    let progress = RenderProgress()
+    // AVSpeechSynthesizer holds `delegate` WEAKLY. Assigning one and walking away
+    // deallocates it the moment this function returns, and no range is ever reported —
+    // which is exactly what shipped: playback and timings fine, highlighting silently
+    // absent. The collector survives because `finish` below reads the marks out of it,
+    // and `finish` is retained by the write callback for the duration of the write.
+    let collector = MarkCollector(progress: progress)
+    synthesizer.delegate = collector
 
     // The buffer callback and the watchdog below race to settle the promise, from
     // different queues, so the flag they race on is read and set under a lock rather
@@ -335,10 +426,12 @@ public class ExpoTtsFileModule: Module {
       DispatchQueue.main.async { self?.active.remove(synthesizer) }
       switch result {
       case .success:
-        let durationMs = sampleRate > 0 ? Int(Double(totalFrames) / sampleRate * 1000.0) : 0
+        let frames = progress.totalFrames
+        let durationMs = sampleRate > 0 ? Int(Double(frames) / sampleRate * 1000.0) : 0
         promise.resolve([
           "uri": fileURL.absoluteString,
           "durationMs": durationMs,
+          "marks": collector.marks(sampleRate: sampleRate),
         ])
       case .failure(let error):
         promise.reject("ERR_TTS", error.localizedDescription)
@@ -372,7 +465,7 @@ public class ExpoTtsFileModule: Module {
           )
         }
         try audioFile?.write(from: pcmBuffer)
-        totalFrames += AVAudioFramePosition(pcmBuffer.frameLength)
+        progress.advance(by: pcmBuffer.frameLength)
       } catch {
         finish(.failure(error))
       }
