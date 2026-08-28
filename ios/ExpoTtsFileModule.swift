@@ -432,6 +432,9 @@ public class ExpoTtsFileModule: Module {
         self?.active.remove(synthesizer)
       }
       self?.cancellers.removeValue(forKey: key)
+      // Unlinking while the writer may still hold the file is safe on this platform; at
+      // worst the delete fails and the partial stays an ordinary cache file.
+      try? FileManager.default.removeItem(at: fileURL)
       promise.reject(
         "ERR_TTS_TIMEOUT",
         "Speech synthesis did not finish within \(Int(timeout * 1000)) ms"
@@ -451,6 +454,7 @@ public class ExpoTtsFileModule: Module {
           synthesizer.stopSpeaking(at: .immediate)
           self?.active.remove(synthesizer)
         }
+        try? FileManager.default.removeItem(at: fileURL)
         promise.reject("ERR_TTS_CANCELLED", "Synthesis was cancelled.")
         return true
       }
@@ -486,6 +490,7 @@ public class ExpoTtsFileModule: Module {
           "marks": collector.marks(sampleRate: sampleRate),
         ])
       case .failure(let error):
+        try? FileManager.default.removeItem(at: fileURL)
         promise.reject("ERR_TTS", error.localizedDescription)
       }
     }

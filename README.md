@@ -185,7 +185,8 @@ at a time regardless.
 requests were dropped — enough for a screen being unmounted to tell whether it interrupted
 work or arrived after it had finished. Each abandoned call rejects with
 `ERR_TTS_CANCELLED`, which is the outcome you asked for rather than a failure to report.
-Partial files it leaves behind are ordinary cache files; `clearCache()` removes them.
+Whatever a cancelled or failed request had written is deleted — its uri was never handed
+out, so the files would be unreachable garbage.
 
 It covers the file paths only — the live `speak*` functions have `stopLiveSpeech()`.
 
