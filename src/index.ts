@@ -79,6 +79,22 @@ export async function getCacheSize(): Promise<number> {
 }
 
 /**
+ * Abandon every synthesis that is in flight or queued, resolving with how many were
+ * dropped — so a screen being unmounted can tell whether it interrupted work or arrived
+ * after it had finished.
+ *
+ * Each abandoned call rejects with `ERR_TTS_CANCELLED`; that is the outcome the caller
+ * asked for, so treat it as such rather than as an error to report. Partial files left
+ * behind are ordinary cache files — {@link clearCache} removes them.
+ *
+ * Covers the file paths only. The live `speak*` functions have {@link stopLiveSpeech},
+ * which is iOS-only for the same reason the live path is.
+ */
+export async function cancelAll(): Promise<number> {
+  return ExpoTtsFile.cancelAll();
+}
+
+/**
  * iOS only: LIVE speech (not to a file) with the IPA attribute from `options.ipa` —
  * for interactive playback, where waiting on a file write buys nothing. Rejects on
  * Android and web, where it is not implemented.

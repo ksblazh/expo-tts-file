@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import {
+  cancelAll,
   clearCache,
   deleteFile,
   getCacheSize,
@@ -33,6 +34,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [watchdogLog, setWatchdogLog] = useState<string[]>([]);
   const [cacheLog, setCacheLog] = useState<string[]>([]);
+  const [longLog, setLongLog] = useState<string[]>([]);
   const [cacheSize, setCacheSize] = useState<number | null>(null);
   const [spokenText, setSpokenText] = useState('');
 
@@ -218,6 +220,66 @@ export default function App() {
     setCacheSize(await getCacheSize().catch(() => null));
   }
 
+  // Device check for long text and for cancelling. Android caps one engine call at about
+  // 4000 characters, so this passes well past that: the point is that the caller sees one
+  // file and one set of marks whose offsets still describe the text they passed.
+  async function checkLongText() {
+    setError(null);
+    setBusy(true);
+    const log: string[] = [];
+    const note = (line: string) => {
+      log.push(line);
+      setLongLog([...log]);
+    };
+    const long = (
+      'This paragraph exists to run past the four thousand character limit that a single ' +
+      'Android engine call accepts, so the module has to split it, render the parts and ' +
+      'join them back into one file. '
+    ).repeat(40);
+    try {
+      note(`text is ${long.length} chars`);
+      const res = await synthesizeToFile(long, { language: 'en-US', timeoutMs: 120_000 });
+      note(
+        res.durationMs > 20_000
+          ? `PASS 1/4 — one file, ${Math.round(res.durationMs / 1000)}s`
+          : `FAIL 1/4 — only ${res.durationMs} ms of audio for ${long.length} chars`
+      );
+
+      const last = res.marks[res.marks.length - 1];
+      note(
+        res.marks.length === 0
+          ? 'SKIP 2/4 — this engine reports no ranges'
+          : last.end > 4000
+            ? `PASS 2/4 — marks reach char ${last.end}, past the single-call limit`
+            : `FAIL 2/4 — marks stop at char ${last.end}, so later parts were not offset`
+      );
+      note(
+        res.marks.length === 0
+          ? 'SKIP 3/4'
+          : last.timeMs > 20_000
+            ? `PASS 3/4 — last mark at ${Math.round(last.timeMs / 1000)}s, so timings span the join`
+            : `FAIL 3/4 — last mark at ${last.timeMs} ms, timings did not shift across parts`
+      );
+      await deleteFile(res.uri).catch(() => {});
+
+      // Cancel: start another long one and drop it while it is still running.
+      const pending = synthesizeToFile(long, { language: 'en-US', timeoutMs: 120_000 });
+      const failure = pending.then(() => null).catch((e) => e);
+      const dropped = await cancelAll();
+      const err = (await failure) as { code?: string } | null;
+      note(
+        dropped >= 1 && err?.code === 'ERR_TTS_CANCELLED'
+          ? `PASS 4/4 — cancelled ${dropped}, rejected as ERR_TTS_CANCELLED`
+          : `FAIL 4/4 — cancelAll returned ${dropped}, rejection was ${err?.code ?? String(err)}`
+      );
+    } catch (e) {
+      note(`FAIL — the check itself threw: ${String(e)}`);
+    } finally {
+      await refreshCacheSize();
+      setBusy(false);
+    }
+  }
+
   // Device check for the cache API. Steps 3 and 4 are the ones worth having: a path that
   // escapes the module's directory with `..`, and a sibling directory whose name starts
   // the same way, both of which a naive prefix check would accept.
@@ -336,6 +398,21 @@ export default function App() {
               </Text>
             </View>
           )}
+        </Group>
+
+        <Group name="Long text and cancelling">
+          <Text style={styles.hint}>
+            Synthesizes past Android&apos;s single-call limit, checks the parts were joined
+            and the timings shifted, then cancels one mid-flight.
+          </Text>
+          <Button title="Run check" onPress={checkLongText} disabled={busy} />
+          {longLog.map((line) => (
+            <Text
+              key={line}
+              style={line.startsWith('FAIL') ? styles.fail : line.startsWith('PASS') ? styles.pass : styles.hint}>
+              {line}
+            </Text>
+          ))}
         </Group>
 
         <Group name="Cache">

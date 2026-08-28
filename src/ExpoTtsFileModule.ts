@@ -26,6 +26,8 @@ declare class ExpoTtsFileModule extends NativeModule<Record<string, never>> {
   clearCache(): Promise<number>;
   /** Total size in bytes of the files this module produced. */
   getCacheSize(): Promise<number>;
+  /** Abandon every synthesis in flight; resolves with how many were dropped. */
+  cancelAll(): Promise<number>;
 }
 
 export default requireNativeModule<ExpoTtsFileModule>('ExpoTtsFile');
