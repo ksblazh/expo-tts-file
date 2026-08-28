@@ -106,6 +106,11 @@ class ExpoTtsFileModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ExpoTtsFile")
 
+    // Fired once per finished piece of a synthesis. A short text is one piece, so a
+    // single {1, 1} arrives just before the promise resolves; a long text is the only
+    // feedback the caller gets during a render that can run for minutes.
+    Events("onSynthesisProgress")
+
     AsyncFunction("synthesizeToFile") { text: String, options: SynthesizeOptions, promise: Promise ->
       withEngine { engine ->
         if (engine == null) {
@@ -190,6 +195,7 @@ class ExpoTtsFileModule : Module() {
       // Neither belongs under a lock the callbacks also take.
       tts?.stop()
       dropped.forEach {
+        discardFiles(it)
         it.promise.reject(CodedException("ERR_TTS_CANCELLED", "Synthesis was cancelled", null))
       }
       // A callback still arriving for a cancelled utterance finds no matching current
@@ -286,6 +292,20 @@ class ExpoTtsFileModule : Module() {
     }
   }
 
+  /**
+   * Best-effort removal of everything a failed or cancelled request wrote.
+   *
+   * A request that does not resolve never hands its uri to anyone, so whatever it wrote
+   * is unreachable garbage — a cancelled long text was leaving a zero-length piece in the
+   * cache, which then showed up as "0 bytes but 1 file" in the cache accounting. Deleting
+   * while the engine may still hold the file is fine: at worst the delete fails and the
+   * file remains an ordinary cache file, which clearCache() covers.
+   */
+  private fun discardFiles(req: Request) {
+    req.chunks.forEach { it.file.delete() }
+    req.file.delete()
+  }
+
   /** Forget the in-flight request and disarm its watchdog. Must hold [queueLock]. */
   private fun clearCurrentLocked() {
     current?.let { disarmWatchdogLocked(it) }
@@ -308,6 +328,7 @@ class ExpoTtsFileModule : Module() {
     val timeoutMs = req.options.timeoutMs?.toLong() ?: DEFAULT_TIMEOUT_MS
     val watchdog = Runnable {
       val timedOut = takeCurrent(req.utteranceId) ?: return@Runnable
+      discardFiles(timedOut)
       timedOut.promise.reject(
         CodedException("ERR_TTS_TIMEOUT", "TTS synthesis did not finish within $timeoutMs ms", null)
       )
@@ -330,6 +351,7 @@ class ExpoTtsFileModule : Module() {
     try {
       startUnguarded(req)
     } catch (e: Exception) {
+      discardFiles(req)
       req.promise.reject(
         CodedException("ERR_TTS", "TTS engine failed to accept the request: ${e.message}", e)
       )
@@ -359,7 +381,15 @@ class ExpoTtsFileModule : Module() {
     engine.setSpeechRate(req.options.rate?.toFloat() ?: 1.0f)
     engine.setPitch(req.options.pitch?.toFloat() ?: 1.0f)
 
+    // {done: 0} up front, so a caller knows how many pieces are coming before the first
+    // one lands — the first per-piece event otherwise arrives only after minutes of
+    // silence on a long text.
+    sendEvent(
+      "onSynthesisProgress",
+      mapOf("id" to req.id, "done" to 0, "total" to req.chunks.size)
+    )
     if (!speakChunkLocked(req)) {
+      discardFiles(req)
       req.promise.reject(CodedException("Failed to start synthesizeToFile"))
       advance()
     }
@@ -408,6 +438,7 @@ class ExpoTtsFileModule : Module() {
     override fun onDone(utteranceId: String?) {
       // Null also means "this piece is done and the next one is already running" — the
       // request is only handed back once every piece has been rendered.
+      // finishPiece reports the progress event either way, so it is not repeated here.
       val req = finishPiece(utteranceId) ?: return
       try {
         if (req.chunks.size > 1) {
@@ -421,6 +452,7 @@ class ExpoTtsFileModule : Module() {
           )
         )
       } catch (e: Exception) {
+        discardFiles(req)
         req.promise.reject(
           CodedException("ERR_TTS_FILE", "Could not assemble the audio: ${e.message}", e)
         )
@@ -435,12 +467,14 @@ class ExpoTtsFileModule : Module() {
     @Deprecated("Deprecated in Java", ReplaceWith(""))
     override fun onError(utteranceId: String?) {
       val req = takeCurrent(utteranceId) ?: return
+      discardFiles(req)
       req.promise.reject(CodedException("TTS synthesis error"))
       advance()
     }
 
     override fun onError(utteranceId: String?, errorCode: Int) {
       val req = takeCurrent(utteranceId) ?: return
+      discardFiles(req)
       req.promise.reject(CodedException("TTS synthesis error (code $errorCode)"))
       advance()
     }
@@ -461,6 +495,12 @@ class ExpoTtsFileModule : Module() {
         return null
       }
       disarmWatchdogLocked(req)
+      // From inside the lock, but the payload is a snapshot: sendEvent hands the map to
+      // the JS bridge without calling back into this module.
+      sendEvent(
+        "onSynthesisProgress",
+        mapOf("id" to req.id, "done" to req.index + 1, "total" to req.chunks.size)
+      )
       if (req.index + 1 >= req.chunks.size) {
         current = null
         return req
@@ -468,6 +508,7 @@ class ExpoTtsFileModule : Module() {
       req.index++
       if (!speakChunkLocked(req)) {
         current = null
+        discardFiles(req)
         req.promise.reject(
           CodedException("Failed to continue synthesizeToFile after part ${req.index}")
         )

@@ -172,6 +172,12 @@ public class ExpoTtsFileModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoTtsFile")
 
+    // Fired once per finished piece of a synthesis. iOS has no input-length limit, so a
+    // synthesis is always a single piece and one {1, 1} arrives just before the promise
+    // resolves — the event exists here so cross-platform code can subscribe without a
+    // platform check, not because it carries information on this platform.
+    Events("onSynthesisProgress")
+
     AsyncFunction("synthesizeToFile") { (text: String, options: SynthesizeOptions, promise: Promise) in
       self.synthesize(
         utterance: Self.utterance(text: text, ipa: options.ipa, options: options),
@@ -426,6 +432,9 @@ public class ExpoTtsFileModule: Module {
         self?.active.remove(synthesizer)
       }
       self?.cancellers.removeValue(forKey: key)
+      // Unlinking while the writer may still hold the file is safe on this platform; at
+      // worst the delete fails and the partial stays an ordinary cache file.
+      try? FileManager.default.removeItem(at: fileURL)
       promise.reject(
         "ERR_TTS_TIMEOUT",
         "Speech synthesis did not finish within \(Int(timeout * 1000)) ms"
@@ -445,6 +454,7 @@ public class ExpoTtsFileModule: Module {
           synthesizer.stopSpeaking(at: .immediate)
           self?.active.remove(synthesizer)
         }
+        try? FileManager.default.removeItem(at: fileURL)
         promise.reject("ERR_TTS_CANCELLED", "Synthesis was cancelled.")
         return true
       }
@@ -464,16 +474,33 @@ public class ExpoTtsFileModule: Module {
       case .success:
         let frames = progress.totalFrames
         let durationMs = sampleRate > 0 ? Int(Double(frames) / sampleRate * 1000.0) : 0
+        self?.sendEvent(
+          "onSynthesisProgress",
+          // Matches Android's payload: the bare id, such that the uri's file name is
+          // "tts-<id>" plus the platform extension.
+          [
+            "id": String(fileURL.deletingPathExtension().lastPathComponent.dropFirst(4)),
+            "done": 1,
+            "total": 1,
+          ]
+        )
         promise.resolve([
           "uri": fileURL.absoluteString,
           "durationMs": durationMs,
           "marks": collector.marks(sampleRate: sampleRate),
         ])
       case .failure(let error):
+        try? FileManager.default.removeItem(at: fileURL)
         promise.reject("ERR_TTS", error.localizedDescription)
       }
     }
 
+    // {done: 0} up front, mirroring Android, so subscribers see the start of every
+    // synthesis and not only its completion.
+    sendEvent(
+      "onSynthesisProgress",
+      ["id": String(fileURL.deletingPathExtension().lastPathComponent.dropFirst(4)), "done": 0, "total": 1]
+    )
     synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
       guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
         finish(.failure(TtsError.unexpectedBuffer))
@@ -490,6 +517,17 @@ public class ExpoTtsFileModule: Module {
         return
       }
 
+      // The file work happens under the settle lock, and a settled request drops its
+      // buffers. Without this a cancel raced the callback: the canceller unlinked the
+      // file, and a buffer already past the door then CREATED IT AGAIN — an empty file
+      // reappearing at the uri of a synthesis whose promise had already rejected. Device-
+      // observed on iOS. Holding the lock across the write also means a cancel cannot
+      // unlink between this callback's create and write; it waits, then unlinks after.
+      settleLock.lock()
+      if settled {
+        settleLock.unlock()
+        return
+      }
       do {
         if audioFile == nil {
           sampleRate = pcmBuffer.format.sampleRate
@@ -502,7 +540,11 @@ public class ExpoTtsFileModule: Module {
         }
         try audioFile?.write(from: pcmBuffer)
         progress.advance(by: pcmBuffer.frameLength)
+        settleLock.unlock()
       } catch {
+        // The lock is NOT held into finish — claim() takes it and NSLock does not
+        // re-enter.
+        settleLock.unlock()
         finish(.failure(error))
       }
     }

@@ -72,6 +72,29 @@ export type SpeechMark = {
   timeMs: number;
 };
 
+/**
+ * Progress of a running synthesis: `{done: 0, total}` as it starts, then one event per
+ * finished piece.
+ *
+ * Long text is rendered in pieces on Android (see the README), and for a passage that
+ * takes minutes this event is the only feedback while it runs. The starting event is
+ * what tells you how many pieces are coming; the piece being rendered after any event is
+ * `done + 1`. A short text — and every text on iOS, which has no input-length limit — is
+ * a single piece: `{done: 0, total: 1}` at the start, `{done: 1, total: 1}` just before
+ * the promise resolves.
+ *
+ * `id` names the synthesis: the file in the resolved `uri` is `tts-<id>` plus the
+ * platform extension. With one request in flight (the common case; Android runs them one
+ * at a time regardless) it can be ignored.
+ */
+export type SynthesisProgressEvent = {
+  id: string;
+  /** Pieces rendered so far. */
+  done: number;
+  /** Total pieces in this synthesis. */
+  total: number;
+};
+
 export type SynthesisResult = {
   /** `file://` URI of the synthesized audio in the app cache directory. */
   uri: string;

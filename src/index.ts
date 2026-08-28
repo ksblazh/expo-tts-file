@@ -1,4 +1,12 @@
-import { SpeechSegment, SynthesizeOptions, SynthesisResult, Voice } from './ExpoTtsFile.types';
+import type { EventSubscription } from 'expo-modules-core';
+
+import {
+  SpeechSegment,
+  SynthesisProgressEvent,
+  SynthesizeOptions,
+  SynthesisResult,
+  Voice,
+} from './ExpoTtsFile.types';
 import ExpoTtsFile from './ExpoTtsFileModule';
 import { requireImplemented } from './platform';
 import { requireNonEmptyString, requireOptions, requireSegments } from './validate';
@@ -76,6 +84,22 @@ export async function clearCache(): Promise<number> {
 /** Total size in bytes of the files this module has produced. */
 export async function getCacheSize(): Promise<number> {
   return ExpoTtsFile.getCacheSize();
+}
+
+/**
+ * Subscribe to synthesis progress — one event per finished piece of a running synthesis.
+ *
+ * Worth wiring up when you feed the module long text: Android renders past-the-limit
+ * passages in pieces (see the README), a multi-minute render is otherwise silent, and
+ * this is what a progress bar can hang on to. Short texts fire a single `{done: 1,
+ * total: 1}` just before their promise resolves.
+ *
+ * Returns the subscription; call `.remove()` when the screen goes away.
+ */
+export function addSynthesisProgressListener(
+  listener: (event: SynthesisProgressEvent) => void
+): EventSubscription {
+  return ExpoTtsFile.addListener('onSynthesisProgress', listener);
 }
 
 /**

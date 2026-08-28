@@ -1,8 +1,18 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-import { SpeechSegment, SynthesizeOptions, SynthesisResult, Voice } from './ExpoTtsFile.types';
+import {
+  SpeechSegment,
+  SynthesisProgressEvent,
+  SynthesizeOptions,
+  SynthesisResult,
+  Voice,
+} from './ExpoTtsFile.types';
 
-declare class ExpoTtsFileModule extends NativeModule<Record<string, never>> {
+export type ExpoTtsFileEvents = {
+  onSynthesisProgress(event: SynthesisProgressEvent): void;
+};
+
+declare class ExpoTtsFileModule extends NativeModule<ExpoTtsFileEvents> {
   /** Synthesize `text` to an audio file on disk and resolve with its URI + duration. */
   synthesizeToFile(text: string, options: SynthesizeOptions): Promise<SynthesisResult>;
   /** iOS only: synthesize a mixed (per-segment IPA) utterance to a file. */

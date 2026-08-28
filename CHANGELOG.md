@@ -19,7 +19,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   were dropped. Abandoned calls reject with `ERR_TTS_CANCELLED`. Until now a screen could
   be unmounted while a synthesis ran on regardless.
 
+- `addSynthesisProgressListener()` — `{id, done, total}` when a synthesis starts
+  (`done: 0`, announcing how many pieces are coming) and again per finished piece. Long
+  text is rendered in pieces, a multi-minute render was otherwise silent, and this is
+  what a progress bar hangs on to. Short texts (and every text on iOS) are a single
+  piece — a start event and a completion event — so cross-platform code subscribes
+  without a platform check.
+
 ### Fixed
+- A synthesis that failed, timed out or was cancelled left its partial output in the
+  cache — files whose uri was never handed to anyone, unreachable except through
+  `clearCache()`. Noticed as "0 bytes on disk, yet 1 file cleared" after cancelling a
+  long text: the engine had created the piece file and was stopped before writing to it.
+  Every non-success path now deletes what the request wrote, on both platforms.
 - Android: an exception from the engine while a request was being handed over — most
   plausibly `getVoices()`, which throws on some devices before the engine is fully up —
   escaped the queue and left it wedged with the promise unsettled. That is the failure the
