@@ -106,6 +106,11 @@ class ExpoTtsFileModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ExpoTtsFile")
 
+    // Fired once per finished piece of a synthesis. A short text is one piece, so a
+    // single {1, 1} arrives just before the promise resolves; a long text is the only
+    // feedback the caller gets during a render that can run for minutes.
+    Events("onSynthesisProgress")
+
     AsyncFunction("synthesizeToFile") { text: String, options: SynthesizeOptions, promise: Promise ->
       withEngine { engine ->
         if (engine == null) {
@@ -359,6 +364,13 @@ class ExpoTtsFileModule : Module() {
     engine.setSpeechRate(req.options.rate?.toFloat() ?: 1.0f)
     engine.setPitch(req.options.pitch?.toFloat() ?: 1.0f)
 
+    // {done: 0} up front, so a caller knows how many pieces are coming before the first
+    // one lands — the first per-piece event otherwise arrives only after minutes of
+    // silence on a long text.
+    sendEvent(
+      "onSynthesisProgress",
+      mapOf("id" to req.id, "done" to 0, "total" to req.chunks.size)
+    )
     if (!speakChunkLocked(req)) {
       req.promise.reject(CodedException("Failed to start synthesizeToFile"))
       advance()
@@ -408,6 +420,7 @@ class ExpoTtsFileModule : Module() {
     override fun onDone(utteranceId: String?) {
       // Null also means "this piece is done and the next one is already running" — the
       // request is only handed back once every piece has been rendered.
+      // finishPiece reports the progress event either way, so it is not repeated here.
       val req = finishPiece(utteranceId) ?: return
       try {
         if (req.chunks.size > 1) {
@@ -461,6 +474,12 @@ class ExpoTtsFileModule : Module() {
         return null
       }
       disarmWatchdogLocked(req)
+      // From inside the lock, but the payload is a snapshot: sendEvent hands the map to
+      // the JS bridge without calling back into this module.
+      sendEvent(
+        "onSynthesisProgress",
+        mapOf("id" to req.id, "done" to req.index + 1, "total" to req.chunks.size)
+      )
       if (req.index + 1 >= req.chunks.size) {
         current = null
         return req

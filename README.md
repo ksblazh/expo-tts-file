@@ -109,6 +109,10 @@ clearCache(): Promise<number>            // resolves with how many files went
 getCacheSize(): Promise<number>          // bytes
 cancelAll(): Promise<number>             // abandon synthesis in flight; how many were dropped
 
+addSynthesisProgressListener(
+  listener: (e: { id: string; done: number; total: number }) => void
+): EventSubscription                     // one event per finished piece; see "Long text"
+
 // iOS only (see the platform table):
 synthesizeMixedToFile(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions):
   Promise<{ uri: string; durationMs: number; marks: SpeechMark[] }>
@@ -156,6 +160,24 @@ Two consequences worth knowing. The per-request `timeoutMs` budget applies to **
 piece**, not to the whole text, so a long article does not need a raised timeout. And an
 engine that fails midway leaves the request rejected with the pieces rendered so far
 discarded — there is no partial file.
+
+A multi-minute render is otherwise silent, so progress is reported as an event:
+`{done: 0, total}` when the synthesis starts, then one event per finished piece. The
+piece being rendered after any event is `done + 1`.
+
+```ts
+const sub = addSynthesisProgressListener(({ done, total }) => {
+  setProgress(done / total);
+});
+// …later:
+sub.remove();
+```
+
+A short text — and any text on iOS, which has no input-length limit — is a single piece:
+`{done: 0, total: 1}` at the start and `{done: 1, total: 1}` just before the promise
+resolves. The event's `id` names the synthesis (the file in the resolved `uri` is
+`tts-<id>`); with one request in flight it can be ignored, and Android runs requests one
+at a time regardless.
 
 ### Cancelling
 

@@ -19,6 +19,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   were dropped. Abandoned calls reject with `ERR_TTS_CANCELLED`. Until now a screen could
   be unmounted while a synthesis ran on regardless.
 
+- `addSynthesisProgressListener()` — `{id, done, total}` when a synthesis starts
+  (`done: 0`, announcing how many pieces are coming) and again per finished piece. Long
+  text is rendered in pieces, a multi-minute render was otherwise silent, and this is
+  what a progress bar hangs on to. Short texts (and every text on iOS) are a single
+  piece — a start event and a completion event — so cross-platform code subscribes
+  without a platform check.
+
 ### Fixed
 - Android: an exception from the engine while a request was being handed over — most
   plausibly `getVoices()`, which throws on some devices before the engine is fully up —

@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import {
+  addSynthesisProgressListener,
   cancelAll,
   clearCache,
   deleteFile,
@@ -35,6 +36,18 @@ export default function App() {
   const [watchdogLog, setWatchdogLog] = useState<string[]>([]);
   const [cacheLog, setCacheLog] = useState<string[]>([]);
   const [longLog, setLongLog] = useState<string[]>([]);
+  const [synthProgress, setSynthProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // The long-text check runs for minutes; this is the event that makes that bearable,
+  // and showing it here is also the device check that the event fires at all.
+  useEffect(() => {
+    const sub = addSynthesisProgressListener(({ done, total }) => {
+      // `done` counts finished pieces, so the piece being rendered NOW is done + 1 —
+      // showing `done` as-is labelled the previous piece while the next one ran.
+      setSynthProgress(total > 1 && done < total ? { done, total } : null);
+    });
+    return () => sub.remove();
+  }, []);
   const [cacheSize, setCacheSize] = useState<number | null>(null);
   const [spokenText, setSpokenText] = useState('');
 
@@ -239,6 +252,7 @@ export default function App() {
     try {
       note(`text is ${long.length} chars`);
       const res = await synthesizeToFile(long, { language: 'en-US', timeoutMs: 120_000 });
+      setSynthProgress(null);
       note(
         res.durationMs > 20_000
           ? `PASS 1/4 — one file, ${Math.round(res.durationMs / 1000)}s`
@@ -406,6 +420,11 @@ export default function App() {
             and the timings shifted, then cancels one mid-flight.
           </Text>
           <Button title="Run check" onPress={checkLongText} disabled={busy} />
+          {synthProgress && (
+            <Text style={styles.hint}>
+              rendering piece {synthProgress.done + 1} of {synthProgress.total}…
+            </Text>
+          )}
           {longLog.map((line) => (
             <Text
               key={line}

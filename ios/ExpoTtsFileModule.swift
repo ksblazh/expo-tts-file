@@ -172,6 +172,12 @@ public class ExpoTtsFileModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoTtsFile")
 
+    // Fired once per finished piece of a synthesis. iOS has no input-length limit, so a
+    // synthesis is always a single piece and one {1, 1} arrives just before the promise
+    // resolves — the event exists here so cross-platform code can subscribe without a
+    // platform check, not because it carries information on this platform.
+    Events("onSynthesisProgress")
+
     AsyncFunction("synthesizeToFile") { (text: String, options: SynthesizeOptions, promise: Promise) in
       self.synthesize(
         utterance: Self.utterance(text: text, ipa: options.ipa, options: options),
@@ -464,6 +470,16 @@ public class ExpoTtsFileModule: Module {
       case .success:
         let frames = progress.totalFrames
         let durationMs = sampleRate > 0 ? Int(Double(frames) / sampleRate * 1000.0) : 0
+        self?.sendEvent(
+          "onSynthesisProgress",
+          // Matches Android's payload: the bare id, such that the uri's file name is
+          // "tts-<id>" plus the platform extension.
+          [
+            "id": String(fileURL.deletingPathExtension().lastPathComponent.dropFirst(4)),
+            "done": 1,
+            "total": 1,
+          ]
+        )
         promise.resolve([
           "uri": fileURL.absoluteString,
           "durationMs": durationMs,
@@ -474,6 +490,12 @@ public class ExpoTtsFileModule: Module {
       }
     }
 
+    // {done: 0} up front, mirroring Android, so subscribers see the start of every
+    // synthesis and not only its completion.
+    sendEvent(
+      "onSynthesisProgress",
+      ["id": String(fileURL.deletingPathExtension().lastPathComponent.dropFirst(4)), "done": 0, "total": 1]
+    )
     synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
       guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
         finish(.failure(TtsError.unexpectedBuffer))

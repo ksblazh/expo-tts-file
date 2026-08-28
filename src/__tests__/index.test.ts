@@ -1,5 +1,6 @@
 import ExpoTtsFile from '../ExpoTtsFileModule';
 import {
+  addSynthesisProgressListener,
   cancelAll,
   clearCache,
   deleteFile,
@@ -27,6 +28,7 @@ jest.mock('../ExpoTtsFileModule', () => ({
     clearCache: jest.fn(),
     getCacheSize: jest.fn(),
     cancelAll: jest.fn(),
+    addListener: jest.fn(),
   },
 }));
 
@@ -129,6 +131,16 @@ describe('delegation to the native module', () => {
     expect(native.deleteFile).toHaveBeenCalledWith('file:///cache/expo-tts-file/tts-1.caf');
     await expect(clearCache()).resolves.toBe(7);
     await expect(getCacheSize()).resolves.toBe(90561);
+  });
+
+  it('the progress listener subscribes to the native event by name', () => {
+    const subscription = { remove: jest.fn() };
+    (native.addListener as jest.Mock).mockReturnValue(subscription);
+    const listener = jest.fn();
+
+    const got = addSynthesisProgressListener(listener);
+    expect(native.addListener).toHaveBeenCalledWith('onSynthesisProgress', listener);
+    expect(got).toBe(subscription);
   });
 
   it('cancelAll reports how many requests it dropped', async () => {
