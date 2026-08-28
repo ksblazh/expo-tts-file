@@ -3,6 +3,34 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Long text no longer has to fit in one engine call. Android's `TextToSpeech` accepts only
+  about 4000 characters at a time, and past that some engines quietly produce nothing
+  while reporting success — the failure mode behind
+  [expo/expo#7214](https://github.com/expo/expo/issues/7214). The module now splits longer
+  text at sentence boundaries, renders the pieces in order and joins their PCM into a
+  single file. It is invisible to the caller: one call, one file, and `marks` whose
+  offsets still refer to the text that was passed in and whose timestamps refer to the
+  joined audio. The `timeoutMs` budget applies per piece, so a long article does not need
+  a raised timeout. iOS has no such limit and is handed the text whole.
+- `cancelAll()` — abandon every synthesis in flight or queued, resolving with how many
+  were dropped. Abandoned calls reject with `ERR_TTS_CANCELLED`. Until now a screen could
+  be unmounted while a synthesis ran on regardless.
+
+### Fixed
+- Android: an exception from the engine while a request was being handed over — most
+  plausibly `getVoices()`, which throws on some devices before the engine is fully up —
+  escaped the queue and left it wedged with the promise unsettled. That is the failure the
+  synthesis watchdog exists for, reached by a path the watchdog cannot cover, because it
+  is armed further down. Handing a request over is now guarded end to end.
+- Android: waiting for the TTS engine to initialize had no deadline. `TextToSpeech`'s init
+  listener is not guaranteed to fire, and on a device without a usable engine every call
+  waited forever with no `ERR_TTS_TIMEOUT` — the watchdog only covers synthesis, which
+  such a device never reaches. Each caller now carries its own 15 s deadline, so a late
+  listener still serves whoever comes after.
+
 ## [0.2.4] — 2026-08-27
 
 ### Added

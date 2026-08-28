@@ -25,6 +25,10 @@ describe('web stub', () => {
     await expect(WebModule.getVoices()).resolves.toEqual([]);
   });
 
+  it('cancelAll reports nothing to cancel', async () => {
+    await expect(WebModule.cancelAll()).resolves.toBe(0);
+  });
+
   it('the cache functions report an empty cache rather than throwing', async () => {
     await expect(WebModule.getCacheSize()).resolves.toBe(0);
     await expect(WebModule.clearCache()).resolves.toBe(0);

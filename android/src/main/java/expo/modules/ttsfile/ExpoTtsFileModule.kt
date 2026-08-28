@@ -18,8 +18,10 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SynthesizeOptions : Record {
   @Field var language: String = "en-US"
@@ -46,18 +48,41 @@ class ExpoTtsFileModule : Module() {
   // The watchdogs run on the main looper; all they ever do is reject a promise.
   private val watchdogHandler = Handler(Looper.getMainLooper())
 
+  /**
+   * One piece of the request's text as handed to the engine.
+   *
+   * Android caps a single `synthesizeToFile` call at
+   * `TextToSpeech.getMaxSpeechInputLength()` characters — about 4000 — and past that some
+   * engines quietly produce nothing and report success, which is worse than an error.
+   * Anything longer is therefore split, rendered piece by piece and joined back into one
+   * file, so a caller can hand over an article without knowing any of this.
+   */
+  private class Chunk(val text: String, val charOffset: Int, val file: File) {
+    /** Ranges the engine reported for THIS piece; guarded by [queueLock]. */
+    val marks = mutableListOf<RawRange>()
+
+    /** Audio frames this piece contributed, filled in while joining. */
+    var frames: Long = 0
+  }
+
   private class Request(
     val text: String,
     val options: SynthesizeOptions,
     val promise: Promise,
-    val utteranceId: String,
-    val file: File
+    val id: String,
+    val file: File,
+    val chunks: List<Chunk>
   ) {
     /** Recovery timer, disarmed by whichever settles the request first. */
     var watchdog: Runnable? = null
 
-    /** Ranges the engine reported while rendering; guarded by [queueLock]. */
-    val marks = mutableListOf<RawRange>()
+    /** Which piece is with the engine now. */
+    var index = 0
+
+    val chunk: Chunk get() = chunks[index]
+
+    /** Per PIECE, not per request: the engine keys its callbacks by this. */
+    val utteranceId: String get() = "$id-$index"
   }
 
   /**
@@ -87,9 +112,20 @@ class ExpoTtsFileModule : Module() {
           promise.reject(CodedException("TTS engine failed to initialize"))
           return@withEngine
         }
-        val utteranceId = UUID.randomUUID().toString()
-        val file = File(cacheDir, "tts-$utteranceId.wav")
-        enqueue(Request(text, options, promise, utteranceId, file))
+        val id = UUID.randomUUID().toString()
+        val dir = cacheDir
+        val target = File(dir, "tts-$id.wav")
+        val pieces = splitForEngine(text, TextToSpeech.getMaxSpeechInputLength())
+        // A single piece is rendered straight into the final file — there is nothing to
+        // join, and copying it would only cost time and disk.
+        val chunks = pieces.mapIndexed { i, piece ->
+          Chunk(
+            piece.second,
+            piece.first,
+            if (pieces.size == 1) target else File(dir, "tts-$id-$i.wav")
+          )
+        }
+        enqueue(Request(text, options, promise, id, target, chunks))
       }
     }
 
@@ -134,6 +170,33 @@ class ExpoTtsFileModule : Module() {
       }
     }
 
+    // Abandon everything in flight and everything queued behind it. Returns how many
+    // requests were dropped, so a caller unmounting a screen can tell whether it
+    // interrupted work or arrived after it finished.
+    //
+    // Only covers file synthesis; the live speech path has stopLiveSpeech(), which is
+    // iOS-only for the same reason the live path is.
+    AsyncFunction("cancelAll") { promise: Promise ->
+      val dropped = synchronized(queueLock) {
+        val victims = mutableListOf<Request>()
+        current?.let { victims.add(it) }
+        victims.addAll(queue)
+        queue.clear()
+        clearCurrentLocked()
+        processing = false
+        victims
+      }
+      // Outside the lock: stop() reaches the engine, and rejecting crosses into JS.
+      // Neither belongs under a lock the callbacks also take.
+      tts?.stop()
+      dropped.forEach {
+        it.promise.reject(CodedException("ERR_TTS_CANCELLED", "Synthesis was cancelled", null))
+      }
+      // A callback still arriving for a cancelled utterance finds no matching current
+      // request and is ignored, which is what takeCurrent already does for a late one.
+      promise.resolve(dropped.size)
+    }
+
     // Both take an explicit Promise rather than being written as no-argument lambdas:
     // the DSL carries two overloads for a bare `{ … }` body, and the Promise form is
     // unambiguous as well as being what the rest of this module uses.
@@ -153,14 +216,34 @@ class ExpoTtsFileModule : Module() {
     }
   }
 
-  /** Run [block] once the TTS engine is initialized (passing null if init failed). */
+  /**
+   * Run [block] once the TTS engine is initialized, passing null if it failed or never
+   * reported.
+   *
+   * The null-on-timeout half matters more than it looks: `TextToSpeech`'s init listener
+   * is not guaranteed to fire, and on a device with no usable engine it may not. Without
+   * a deadline here every caller waits forever — the same "promise never settles" failure
+   * the synthesis watchdog exists for, one storey up, and NOT covered by it, because that
+   * timer is armed in [start] and this never reaches [start].
+   *
+   * Each caller carries its own deadline rather than the module holding one init-wide
+   * state machine: a late listener then still serves everyone who came after, and a
+   * caller can never be woken twice.
+   */
   private fun withEngine(block: (TextToSpeech?) -> Unit) {
+    val delivered = AtomicBoolean(false)
+    val once: (TextToSpeech?) -> Unit = { engine ->
+      if (delivered.compareAndSet(false, true)) {
+        block(engine)
+      }
+    }
     synchronized(initLock) {
       if (ready) {
-        block(tts)
+        once(tts)
         return
       }
-      initWaiters.add(block)
+      initWaiters.add(once)
+      watchdogHandler.postDelayed({ once(null) }, INIT_TIMEOUT_MS)
       if (!initStarted) {
         initStarted = true
         tts = TextToSpeech(context) { status ->
@@ -205,11 +288,14 @@ class ExpoTtsFileModule : Module() {
 
   /** Forget the in-flight request and disarm its watchdog. Must hold [queueLock]. */
   private fun clearCurrentLocked() {
-    current?.let { req ->
-      req.watchdog?.let { watchdogHandler.removeCallbacks(it) }
-      req.watchdog = null
-    }
+    current?.let { disarmWatchdogLocked(it) }
     current = null
+  }
+
+  /** Must hold [queueLock]. */
+  private fun disarmWatchdogLocked(req: Request) {
+    req.watchdog?.let { watchdogHandler.removeCallbacks(it) }
+    req.watchdog = null
   }
 
   /**
@@ -231,7 +317,27 @@ class ExpoTtsFileModule : Module() {
     watchdogHandler.postDelayed(watchdog, timeoutMs)
   }
 
+  /**
+   * Hand [req] to the engine. Must hold [queueLock].
+   *
+   * The whole body is guarded because an exception escaping here escapes [pumpLocked] and
+   * [enqueue] too, leaving `processing` set with the promise unsettled — the queue wedged
+   * exactly as it was before the watchdog existed, and by a path the watchdog cannot
+   * cover, since it is armed further down. `getVoices()` is the known offender: it throws
+   * on some devices when the engine is not fully up.
+   */
   private fun start(req: Request) {
+    try {
+      startUnguarded(req)
+    } catch (e: Exception) {
+      req.promise.reject(
+        CodedException("ERR_TTS", "TTS engine failed to accept the request: ${e.message}", e)
+      )
+      advance()
+    }
+  }
+
+  private fun startUnguarded(req: Request) {
     val engine = tts
     if (engine == null) {
       req.promise.reject(CodedException("TTS engine is not available"))
@@ -253,17 +359,27 @@ class ExpoTtsFileModule : Module() {
     engine.setSpeechRate(req.options.rate?.toFloat() ?: 1.0f)
     engine.setPitch(req.options.pitch?.toFloat() ?: 1.0f)
 
-    // Armed before the engine is handed the text rather than after it accepts it: this
-    // runs while [queueLock] is held, so no callback can settle the request in between,
-    // and an engine that accepts the text and then says nothing is covered from the
-    // start.
-    armWatchdogLocked(req)
-
-    val result = engine.synthesizeToFile(req.text, Bundle(), req.file, req.utteranceId)
-    if (result != TextToSpeech.SUCCESS) {
+    if (!speakChunkLocked(req)) {
       req.promise.reject(CodedException("Failed to start synthesizeToFile"))
       advance()
     }
+  }
+
+  /**
+   * Hand the request's current piece to the engine. Must hold [queueLock].
+   *
+   * The watchdog is armed before the engine is handed the text rather than after it
+   * accepts it: this runs under [queueLock], so no callback can settle the piece in
+   * between, and an engine that accepts the text and then says nothing is covered from
+   * the start. It is re-armed per piece, so the budget applies to each one rather than
+   * to a whole article.
+   */
+  private fun speakChunkLocked(req: Request): Boolean {
+    armWatchdogLocked(req)
+    val engine = tts ?: return false
+    val chunk = req.chunk
+    return engine.synthesizeToFile(chunk.text, Bundle(), chunk.file, req.utteranceId) ==
+      TextToSpeech.SUCCESS
   }
 
   private val progressListener = object : UtteranceProgressListener() {
@@ -284,21 +400,36 @@ class ExpoTtsFileModule : Module() {
       synchronized(queueLock) {
         val req = current
         if (req != null && req.utteranceId == utteranceId) {
-          req.marks.add(RawRange(start, end, frame))
+          req.chunk.marks.add(RawRange(start, end, frame))
         }
       }
     }
 
     override fun onDone(utteranceId: String?) {
-      val req = takeCurrent(utteranceId) ?: return
-      req.promise.resolve(
-        mapOf(
-          "uri" to Uri.fromFile(req.file).toString(),
-          "durationMs" to durationOf(req.file),
-          "marks" to marksOf(req)
+      // Null also means "this piece is done and the next one is already running" — the
+      // request is only handed back once every piece has been rendered.
+      val req = finishPiece(utteranceId) ?: return
+      try {
+        if (req.chunks.size > 1) {
+          concatWav(req.chunks, req.file)
+        }
+        req.promise.resolve(
+          mapOf(
+            "uri" to Uri.fromFile(req.file).toString(),
+            "durationMs" to durationOf(req.file),
+            "marks" to marksOf(req)
+          )
         )
-      )
-      advance()
+      } catch (e: Exception) {
+        req.promise.reject(
+          CodedException("ERR_TTS_FILE", "Could not assemble the audio: ${e.message}", e)
+        )
+      } finally {
+        if (req.chunks.size > 1) {
+          req.chunks.forEach { it.file.delete() }
+        }
+        advance()
+      }
     }
 
     @Deprecated("Deprecated in Java", ReplaceWith(""))
@@ -312,6 +443,37 @@ class ExpoTtsFileModule : Module() {
       val req = takeCurrent(utteranceId) ?: return
       req.promise.reject(CodedException("TTS synthesis error (code $errorCode)"))
       advance()
+    }
+  }
+
+  /**
+   * Called when the engine finishes a piece.
+   *
+   * Returns the request only when that was its LAST piece, having released it from the
+   * queue; otherwise it starts the next piece and returns null, so the request stays in
+   * flight and the caller's promise waits for the whole text rather than the first
+   * 4000 characters of it.
+   */
+  private fun finishPiece(utteranceId: String?): Request? {
+    synchronized(queueLock) {
+      val req = current ?: return null
+      if (req.utteranceId != utteranceId) {
+        return null
+      }
+      disarmWatchdogLocked(req)
+      if (req.index + 1 >= req.chunks.size) {
+        current = null
+        return req
+      }
+      req.index++
+      if (!speakChunkLocked(req)) {
+        current = null
+        req.promise.reject(
+          CodedException("Failed to continue synthesizeToFile after part ${req.index}")
+        )
+        advance()
+      }
+      return null
     }
   }
 
@@ -366,23 +528,50 @@ class ExpoTtsFileModule : Module() {
    * rather than guessing when the rate cannot be read or the engine reported nothing —
    * `start`/`end` count UTF-16 code units, which is also how JavaScript indexes strings.
    */
+  /**
+   * The collected ranges as `[{start, end, timeMs}]`, in report order across every piece.
+   *
+   * Two offsets are applied so the numbers describe the ORIGINAL text and the JOINED
+   * audio rather than the piece the engine happened to see: character indices shift by
+   * where the piece starts in the text, and frames shift by everything rendered before
+   * it. Returns empty rather than guessing when the sample rate cannot be read.
+   */
   private fun marksOf(req: Request): List<Map<String, Int>> {
-    if (req.marks.isEmpty()) {
-      return emptyList()
-    }
     val sampleRate = sampleRateOf(req.file)
     if (sampleRate <= 0) {
       return emptyList()
     }
+    val out = mutableListOf<Map<String, Int>>()
+    var framesBefore = 0L
+    for (chunk in req.chunks) {
+      for ((start, end, frame) in rangesOf(chunk)) {
+        out.add(
+          mapOf(
+            "start" to start + chunk.charOffset,
+            "end" to end + chunk.charOffset,
+            // Long on purpose: frames * 1000 overflows Int a few minutes into an utterance.
+            "timeMs" to ((framesBefore + frame).toLong() * 1000L / sampleRate).toInt()
+          )
+        )
+      }
+      framesBefore += chunk.frames
+    }
+    return out
+  }
 
+  /** The piece's ranges, read in whichever argument order describes its own text. */
+  private fun rangesOf(chunk: Chunk): List<Triple<Int, Int, Int>> {
+    if (chunk.marks.isEmpty()) {
+      return emptyList()
+    }
     // Two readings of the same three numbers. Whichever describes the text coherently is
     // the right one; the documented order wins a tie, so a conforming engine is never
     // second-guessed.
-    val documented = req.marks.map { Triple(it.first, it.second, it.third) }
-    val shifted = req.marks.map { Triple(it.second, it.third, it.first) }
-    val chosen = when {
-      describesText(documented, req.text.length) -> documented
-      describesText(shifted, req.text.length) -> {
+    val documented = chunk.marks.map { Triple(it.first, it.second, it.third) }
+    val shifted = chunk.marks.map { Triple(it.second, it.third, it.first) }
+    return when {
+      describesText(documented, chunk.text.length) -> documented
+      describesText(shifted, chunk.text.length) -> {
         Log.w(
           "ExpoTtsFile",
           "This TTS engine reports onRangeStart as (frame, start, end); the platform " +
@@ -393,20 +582,11 @@ class ExpoTtsFileModule : Module() {
       else -> {
         Log.w(
           "ExpoTtsFile",
-          "Discarding ${req.marks.size} speech ranges: neither argument order describes " +
-            "the ${req.text.length}-character utterance. Reporting no marks."
+          "Discarding ${chunk.marks.size} speech ranges: neither argument order describes " +
+            "the ${chunk.text.length}-character piece. Reporting no marks for it."
         )
-        return emptyList()
+        emptyList()
       }
-    }
-
-    return chosen.map { (start, end, frame) ->
-      mapOf(
-        "start" to start,
-        "end" to end,
-        // Long on purpose: frames * 1000 overflows Int a few minutes into an utterance.
-        "timeMs" to (frame.toLong() * 1000L / sampleRate).toInt()
-      )
     }
   }
 
@@ -428,6 +608,168 @@ class ExpoTtsFileModule : Module() {
     }
     return true
   }
+
+  /**
+   * Split [text] into pieces of at most [limit] characters, back to back and losing
+   * nothing, each paired with where it starts in the original.
+   *
+   * Contiguity is the point: the reported character ranges are offsets into these pieces,
+   * and they are shifted back onto the original text by exactly these offsets. A split
+   * that dropped or duplicated a character would silently misplace every highlight after
+   * it.
+   *
+   * Sentence boundaries are preferred so the engine's prosody has somewhere natural to
+   * breathe; failing that a space, and failing that a hard cut, because a caller who
+   * passes 12000 characters with no punctuation still deserves audio.
+   */
+  private fun splitForEngine(text: String, limit: Int): List<Pair<Int, String>> {
+    if (limit <= 0 || text.length <= limit) {
+      return listOf(0 to text)
+    }
+    val out = mutableListOf<Pair<Int, String>>()
+    var pos = 0
+    while (pos < text.length) {
+      if (text.length - pos <= limit) {
+        out.add(pos to text.substring(pos))
+        break
+      }
+      val windowEnd = pos + limit
+      var cut = -1
+      for (i in windowEnd - 1 downTo pos) {
+        if (text[i] in SENTENCE_ENDERS) {
+          cut = i + 1
+          break
+        }
+      }
+      if (cut <= pos) {
+        for (i in windowEnd - 1 downTo pos) {
+          if (text[i].isWhitespace()) {
+            cut = i + 1
+            break
+          }
+        }
+      }
+      if (cut <= pos) {
+        cut = windowEnd
+      }
+      out.add(pos to text.substring(pos, cut))
+      pos = cut
+    }
+    return out
+  }
+
+  /**
+   * Join the pieces' WAV files into [out], one header and their PCM back to back.
+   *
+   * The chunks are walked rather than read at fixed offsets: a WAV may carry `LIST` or
+   * other chunks before `data`, and some engines write them. Audio is streamed rather
+   * than loaded, so joining an article does not hold it all in memory, and each piece's
+   * frame count is recorded on the way through — that is what shifts its timings onto the
+   * joined audio.
+   */
+  private fun concatWav(chunks: List<Chunk>, out: File) {
+    var format: ByteArray? = null
+    val regions = mutableListOf<Triple<File, Long, Long>>()
+    var total = 0L
+
+    for (chunk in chunks) {
+      val (fmt, dataAt, dataSize) = wavLayout(chunk.file)
+      val known = format
+      if (known == null) {
+        format = fmt
+      } else if (!fmt.copyOf(16).contentEquals(known.copyOf(16))) {
+        throw IllegalStateException("the engine produced parts in different audio formats")
+      }
+      val blockAlign = leShort(fmt, 12)
+      chunk.frames = if (blockAlign > 0) dataSize / blockAlign else 0L
+      regions.add(Triple(chunk.file, dataAt, dataSize))
+      total += dataSize
+    }
+
+    val fmt = format ?: throw IllegalStateException("nothing to join")
+    if (total + fmt.size + 28 > Int.MAX_VALUE) {
+      throw IllegalStateException("the joined audio is too large for a WAV container")
+    }
+
+    out.outputStream().buffered().use { sink ->
+      sink.write("RIFF".toByteArray(Charsets.US_ASCII))
+      sink.write(leBytes((4 + 8 + fmt.size + 8 + total).toInt()))
+      sink.write("WAVE".toByteArray(Charsets.US_ASCII))
+      sink.write("fmt ".toByteArray(Charsets.US_ASCII))
+      sink.write(leBytes(fmt.size))
+      sink.write(fmt)
+      sink.write("data".toByteArray(Charsets.US_ASCII))
+      sink.write(leBytes(total.toInt()))
+
+      val buffer = ByteArray(64 * 1024)
+      for ((file, at, size) in regions) {
+        RandomAccessFile(file, "r").use { source ->
+          source.seek(at)
+          var left = size
+          while (left > 0) {
+            val n = source.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+            if (n <= 0) {
+              throw IllegalStateException("part ended early: $file")
+            }
+            sink.write(buffer, 0, n)
+            left -= n
+          }
+        }
+      }
+    }
+  }
+
+  /** The file's `fmt ` body plus where its `data` body starts and how long it is. */
+  private fun wavLayout(file: File): Triple<ByteArray, Long, Long> {
+    RandomAccessFile(file, "r").use { source ->
+      val riff = ByteArray(12)
+      source.readFully(riff)
+      if (String(riff, 0, 4, Charsets.US_ASCII) != "RIFF" ||
+        String(riff, 8, 4, Charsets.US_ASCII) != "WAVE"
+      ) {
+        throw IllegalStateException("not a WAV file: $file")
+      }
+      var fmt: ByteArray? = null
+      while (source.filePointer + 8 <= source.length()) {
+        val head = ByteArray(8)
+        source.readFully(head)
+        val id = String(head, 0, 4, Charsets.US_ASCII)
+        val size = leInt(head, 4).toLong() and 0xFFFFFFFFL
+        val body = source.filePointer
+        when (id) {
+          "fmt " -> {
+            val bytes = ByteArray(size.toInt())
+            source.readFully(bytes)
+            fmt = bytes
+          }
+          "data" -> return Triple(
+            fmt ?: throw IllegalStateException("fmt chunk missing in $file"),
+            body,
+            size
+          )
+        }
+        // Chunks are padded to an even length.
+        source.seek(body + size + (size and 1L))
+      }
+      throw IllegalStateException("data chunk missing in $file")
+    }
+  }
+
+  private fun leInt(bytes: ByteArray, at: Int): Int =
+    (bytes[at].toInt() and 0xFF) or
+      ((bytes[at + 1].toInt() and 0xFF) shl 8) or
+      ((bytes[at + 2].toInt() and 0xFF) shl 16) or
+      ((bytes[at + 3].toInt() and 0xFF) shl 24)
+
+  private fun leShort(bytes: ByteArray, at: Int): Int =
+    (bytes[at].toInt() and 0xFF) or ((bytes[at + 1].toInt() and 0xFF) shl 8)
+
+  private fun leBytes(value: Int): ByteArray = byteArrayOf(
+    (value and 0xFF).toByte(),
+    ((value ushr 8) and 0xFF).toByte(),
+    ((value ushr 16) and 0xFF).toByte(),
+    ((value ushr 24) and 0xFF).toByte()
+  )
 
   private fun sampleRateOf(file: File): Int {
     val extractor = MediaExtractor()
@@ -470,9 +812,16 @@ class ExpoTtsFileModule : Module() {
   }
 
   companion object {
-    // Far above what any synthesis the engine would have completed takes — it caps its
-    // own input at getMaxSpeechInputLength() characters — and short enough that an app
-    // recovers within the session instead of at the next launch.
+    // Far above what any synthesis the engine would have completed takes, and short
+    // enough that an app recovers within the session instead of at the next launch.
     private const val DEFAULT_TIMEOUT_MS = 60_000L
+
+    // Binding to a TTS service is quick when it works at all; a device that has not
+    // reported in this long is not about to.
+    private const val INIT_TIMEOUT_MS = 15_000L
+
+    // Where a long text is preferably cut. Latin and CJK terminators both, because the
+    // module is used for language learning and the text is not always Latin.
+    private const val SENTENCE_ENDERS = ".!?…。！？"
   }
 }

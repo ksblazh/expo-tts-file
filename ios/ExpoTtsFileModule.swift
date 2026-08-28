@@ -138,6 +138,10 @@ public class ExpoTtsFileModule: Module {
   // Synthesizers are retained for the duration of a write() so they are not
   // deallocated mid-synthesis (the buffer callback would then never complete).
   private var active = Set<AVSpeechSynthesizer>()
+  // One entry per synthesis in flight; calling it settles that request as cancelled and
+  // reports whether it was the one to do so. Touched on the main queue only, alongside
+  // `active`, so the two never disagree about what is running.
+  private var cancellers: [ObjectIdentifier: () -> Bool] = [:]
   // Live-path synthesizer for speakIpa/speakSsml. On the IPA attribute (device-verified,
   // iOS 26.5): it is honored on BOTH paths — speak() and write() — but only when the
   // attributed text is LATIN. Over Cyrillic the voice falls back to its own lexicon and
@@ -294,6 +298,17 @@ public class ExpoTtsFileModule: Module {
       }
     }
 
+    // Abandon every synthesis in flight, resolving with how many were dropped — enough
+    // for a screen being unmounted to tell whether it interrupted work or arrived after
+    // it finished. Covers the file path only; the live one has stopLiveSpeech().
+    AsyncFunction("cancelAll") { (promise: Promise) in
+      DispatchQueue.main.async {
+        let pending = self.cancellers.values
+        self.cancellers.removeAll()
+        promise.resolve(pending.reduce(0) { $0 + ($1() ? 1 : 0) })
+      }
+    }
+
     AsyncFunction("getCacheSize") { () -> Int in
       return Self.cacheFiles().reduce(into: 0) { total, url in
         total += (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
@@ -361,7 +376,7 @@ public class ExpoTtsFileModule: Module {
     }
 
     let synthesizer = AVSpeechSynthesizer()
-    DispatchQueue.main.async { self.active.insert(synthesizer) }
+    let key = ObjectIdentifier(synthesizer)
 
     var audioFile: AVAudioFile?
     var sampleRate: Double = 0
@@ -410,6 +425,7 @@ public class ExpoTtsFileModule: Module {
         synthesizer.stopSpeaking(at: .immediate)
         self?.active.remove(synthesizer)
       }
+      self?.cancellers.removeValue(forKey: key)
       promise.reject(
         "ERR_TTS_TIMEOUT",
         "Speech synthesis did not finish within \(Int(timeout * 1000)) ms"
@@ -417,13 +433,33 @@ public class ExpoTtsFileModule: Module {
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
+    // Registered together with `active` so a cancel can never see one without the other.
+    // The canceller races the buffer callback and the watchdog through the same claim,
+    // so at most one of the three settles the promise.
+    DispatchQueue.main.async {
+      self.active.insert(synthesizer)
+      self.cancellers[key] = { [weak self, weak synthesizer] in
+        guard claim() else { return false }
+        watchdog.cancel()
+        if let synthesizer {
+          synthesizer.stopSpeaking(at: .immediate)
+          self?.active.remove(synthesizer)
+        }
+        promise.reject("ERR_TTS_CANCELLED", "Synthesis was cancelled.")
+        return true
+      }
+    }
+
     let finish: (Result<Void, Error>) -> Void = { [weak self] result in
       guard claim() else { return }
       watchdog.cancel()
       // Close the file BEFORE resolving: AVAudioFile finalizes the header when it is
       // deallocated, and the caller may open the URI the instant the promise resolves.
       audioFile = nil
-      DispatchQueue.main.async { self?.active.remove(synthesizer) }
+      DispatchQueue.main.async {
+        self?.active.remove(synthesizer)
+        self?.cancellers.removeValue(forKey: key)
+      }
       switch result {
       case .success:
         let frames = progress.totalFrames

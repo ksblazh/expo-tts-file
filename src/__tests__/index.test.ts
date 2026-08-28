@@ -1,5 +1,6 @@
 import ExpoTtsFile from '../ExpoTtsFileModule';
 import {
+  cancelAll,
   clearCache,
   deleteFile,
   getCacheSize,
@@ -25,6 +26,7 @@ jest.mock('../ExpoTtsFileModule', () => ({
     deleteFile: jest.fn(),
     clearCache: jest.fn(),
     getCacheSize: jest.fn(),
+    cancelAll: jest.fn(),
   },
 }));
 
@@ -127,6 +129,17 @@ describe('delegation to the native module', () => {
     expect(native.deleteFile).toHaveBeenCalledWith('file:///cache/expo-tts-file/tts-1.caf');
     await expect(clearCache()).resolves.toBe(7);
     await expect(getCacheSize()).resolves.toBe(90561);
+  });
+
+  it('cancelAll reports how many requests it dropped', async () => {
+    native.cancelAll.mockResolvedValue(3);
+    await expect(cancelAll()).resolves.toBe(3);
+    expect(native.cancelAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('a cancelled synthesis rejects with its own code, not a generic failure', async () => {
+    native.synthesizeToFile.mockRejectedValue(new Error('ERR_TTS_CANCELLED'));
+    await expect(synthesizeToFile('hello', EN)).rejects.toThrow(/ERR_TTS_CANCELLED/);
   });
 
   it('deleteFile surfaces the native refusal for a file outside the cache', async () => {

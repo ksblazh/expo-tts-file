@@ -107,6 +107,7 @@ getVoices(language?: string): Promise<Array<{
 deleteFile(uri: string): Promise<void>   // one file this module produced
 clearCache(): Promise<number>            // resolves with how many files went
 getCacheSize(): Promise<number>          // bytes
+cancelAll(): Promise<number>             // abandon synthesis in flight; how many were dropped
 
 // iOS only (see the platform table):
 synthesizeMixedToFile(segments: Array<{ text: string; ipa?: string }>, options: SynthesizeOptions):
@@ -137,6 +138,34 @@ measure against; `stopLiveSpeech()` is the way out of those.
 
 The live `speak*` functions resolve `true` when the utterance finished and `false` when
 it was cancelled — by `stopLiveSpeech` or by a newer utterance.
+
+### Long text
+
+Pass as much as you like. Android's TTS engine accepts only about 4000 characters in one
+call — `TextToSpeech.getMaxSpeechInputLength()` — and past that some engines quietly
+produce nothing while reporting success, which is worse than an error. The module
+therefore splits longer text itself, renders the pieces in order and joins them into one
+file, preferring sentence boundaries so the prosody has somewhere natural to breathe.
+iOS has no such limit and is handed the text whole.
+
+This is invisible from the outside: one call, one file, one set of timings. The `marks`
+offsets refer to the text you passed, not to the pieces, and their timestamps refer to
+the joined audio.
+
+Two consequences worth knowing. The per-request `timeoutMs` budget applies to **each
+piece**, not to the whole text, so a long article does not need a raised timeout. And an
+engine that fails midway leaves the request rejected with the pieces rendered so far
+discarded — there is no partial file.
+
+### Cancelling
+
+`cancelAll()` abandons everything in flight and everything queued, resolving with how many
+requests were dropped — enough for a screen being unmounted to tell whether it interrupted
+work or arrived after it had finished. Each abandoned call rejects with
+`ERR_TTS_CANCELLED`, which is the outcome you asked for rather than a failure to report.
+Partial files it leaves behind are ordinary cache files; `clearCache()` removes them.
+
+It covers the file paths only — the live `speak*` functions have `stopLiveSpeech()`.
 
 ### Highlighting words while the file plays
 
@@ -192,6 +221,7 @@ Failures from the native side reject with a `code` you can branch on:
 | `ERR_TTS_FOREIGN_FILE` | `deleteFile` was handed a path outside the module's own directory |
 | `ERR_TTS_FILE` | an output file could not be created, or a cache file could not be removed |
 | `ERR_TTS` | the synthesizer failed, or the segments contained nothing speakable (iOS) |
+| `ERR_TTS_CANCELLED` | the request was abandoned by `cancelAll` |
 
 Android raises the first three. Its remaining failures — engine initialization, an
 unsupported language, a synthesis the engine aborted — currently carry their reason in the

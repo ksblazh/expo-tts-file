@@ -33,6 +33,10 @@ class ExpoTtsFileModule extends NativeModule<Record<string, never>> {
   async getCacheSize(): Promise<number> {
     return 0;
   }
+
+  async cancelAll(): Promise<number> {
+    return 0;
+  }
 }
 
 export default registerWebModule(ExpoTtsFileModule, 'ExpoTtsFileModule');
