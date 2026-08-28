@@ -517,6 +517,17 @@ public class ExpoTtsFileModule: Module {
         return
       }
 
+      // The file work happens under the settle lock, and a settled request drops its
+      // buffers. Without this a cancel raced the callback: the canceller unlinked the
+      // file, and a buffer already past the door then CREATED IT AGAIN — an empty file
+      // reappearing at the uri of a synthesis whose promise had already rejected. Device-
+      // observed on iOS. Holding the lock across the write also means a cancel cannot
+      // unlink between this callback's create and write; it waits, then unlinks after.
+      settleLock.lock()
+      if settled {
+        settleLock.unlock()
+        return
+      }
       do {
         if audioFile == nil {
           sampleRate = pcmBuffer.format.sampleRate
@@ -529,7 +540,11 @@ public class ExpoTtsFileModule: Module {
         }
         try audioFile?.write(from: pcmBuffer)
         progress.advance(by: pcmBuffer.frameLength)
+        settleLock.unlock()
       } catch {
+        // The lock is NOT held into finish — claim() takes it and NSLock does not
+        // re-enter.
+        settleLock.unlock()
         finish(.failure(error))
       }
     }
