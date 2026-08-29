@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.5] — 2026-08-28
 
 ### Added
 - Long text no longer has to fit in one engine call. Android's `TextToSpeech` accepts only

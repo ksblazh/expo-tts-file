@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name           = 'ExpoTtsFile'
-  s.version        = '0.2.4'
+  s.version        = '0.2.5'
   s.summary        = 'On-device text-to-speech synthesized to an audio file.'
   s.description    = 'Offline TTS-to-file for React Native / Expo: synthesize speech to a playable audio file on device.'
   s.author         = 'Kseniia Blazhkovskaia <ksblazh@gmail.com>'
