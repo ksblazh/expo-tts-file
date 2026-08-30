@@ -44,6 +44,7 @@ class ExpoTtsFileModule : Module() {
   private val queue = ArrayDeque<Request>()
   private var processing = false
   private var current: Request? = null
+  private var pumping = false
 
   // The watchdogs run on the main looper; all they ever do is reject a promise.
   private val watchdogHandler = Handler(Looper.getMainLooper())
@@ -280,13 +281,28 @@ class ExpoTtsFileModule : Module() {
     }
   }
 
-  /** Start the next request if idle. Must hold [queueLock]. */
+  /**
+   * Start requests until one is running or the queue drains. Must hold [queueLock].
+   *
+   * A request that fails inside [start] re-enters here through [advance]; `pumping` turns
+   * that nested call into a no-op so the failure just clears `processing` and this loop
+   * moves to the next request. Without the guard each consecutive synchronous failure
+   * adds a start→advance→pump frame, and the stack depth is whatever the queue length
+   * happens to be.
+   */
   private fun pumpLocked() {
-    if (processing) return
-    val req = queue.removeFirstOrNull() ?: return
-    processing = true
-    current = req
-    start(req)
+    if (pumping) return
+    pumping = true
+    try {
+      while (!processing) {
+        val req = queue.removeFirstOrNull() ?: return
+        processing = true
+        current = req
+        start(req)
+      }
+    } finally {
+      pumping = false
+    }
   }
 
   private fun advance() {
