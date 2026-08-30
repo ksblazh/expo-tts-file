@@ -33,6 +33,18 @@ export type SynthesizeOptions = {
    */
   ipa?: string;
   /**
+   * Output encoding; default `'pcm'`.
+   *
+   * `'pcm'` is uncompressed — a `.wav` on Android, a `.caf` on iOS — at roughly 2.5–3 MB
+   * per minute of speech. `'aac'` produces an `.m4a` (AAC-LC) on both platforms at
+   * roughly a tenth of that, which is what to use for audio that is kept or shipped
+   * rather than played once and deleted. `durationMs` and `marks` are unaffected.
+   *
+   * MP3 is deliberately absent: neither platform ships an MP3 *encoder*, and `.m4a`
+   * plays everywhere `.mp3` does.
+   */
+  format?: 'pcm' | 'aac';
+  /**
    * Watchdog for an engine that never reports back, in milliseconds; default `60000`.
    * After this long without a result the promise rejects with `ERR_TTS_TIMEOUT` instead
    * of staying pending for the life of the app — and on Android the requests queued

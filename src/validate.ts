@@ -32,6 +32,9 @@ export function requireOptions(options: SynthesizeOptions, api: string): void {
   if (options.ipa !== undefined) {
     requireNonEmptyString(options.ipa, api, 'options.ipa');
   }
+  if (options.format !== undefined && options.format !== 'pcm' && options.format !== 'aac') {
+    throw new TypeError(`expo-tts-file: ${api} needs \`options.format\` to be 'pcm' or 'aac'`);
+  }
 }
 
 export function requireSegments(segments: SpeechSegment[], api: string): void {

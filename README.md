@@ -25,11 +25,13 @@ Recorded on a device: synthesize to a file, play it, and highlight each word as 
 
 | Platform | Engine | Output container |
 | --- | --- | --- |
-| iOS 16.4+ | `AVSpeechSynthesizer.write` | CAF (PCM) |
-| Android API 24+ (7.0) | `TextToSpeech.synthesizeToFile` | WAV (PCM) |
+| iOS 16.4+ | `AVSpeechSynthesizer.write` | CAF (PCM) or M4A (AAC) |
+| Android API 24+ (7.0) | `TextToSpeech.synthesizeToFile` | WAV (PCM) or M4A (AAC) |
 | Web | — | not supported (`synthesizeToFile` throws; `getVoices` returns `[]`) |
 
-The container is platform-native PCM; both play back with any standard audio player.
+The default container is platform-native PCM; `format: 'aac'` produces an `.m4a` on both
+platforms instead (see "Audio format"). All of them play back with any standard audio
+player.
 
 The platform floors are the SDK's own (`expo-modules-core`: iOS 16.4; Expo's Gradle
 plugin: `minSdk` 24) — this module adds no requirement of its own beyond them, and SDK 56
@@ -85,6 +87,7 @@ type SynthesizeOptions = {
   pitch?: number;     // 1.0 = normal (see below)
   voice?: string;     // identifier from getVoices()
   ipa?: string;       // iOS only — see "Steering pronunciation" below
+  format?: 'pcm' | 'aac'; // default 'pcm'; 'aac' → .m4a (see "Audio format")
   timeoutMs?: number; // watchdog for a stuck engine, default 60000 (see below)
 };
 
@@ -187,6 +190,28 @@ A short text — and any text on iOS, which has no input-length limit — is a s
 resolves. The event's `id` names the synthesis (the file in the resolved `uri` is
 `tts-<id>`); with one request in flight it can be ignored, and Android runs requests one
 at a time regardless.
+
+### Audio format
+
+The default output is uncompressed PCM — a `.wav` on Android, a `.caf` on iOS — which is
+fine for a clip that is played once and deleted, and costs roughly 2.5–3 MB per minute of
+speech. `format: 'aac'` produces an `.m4a` (AAC-LC, MPEG-4 container) on both platforms
+at roughly a tenth of the size — the format to use for audio that is kept, cached across
+sessions or shipped anywhere:
+
+```ts
+const { uri } = await synthesizeToFile(text, { language: 'en-US', format: 'aac' });
+```
+
+Everything else is unchanged: `durationMs`, `marks` and their timestamps, progress
+events, the cache functions. iOS encodes while it writes; Android's engine can only
+produce WAV, so the module renders PCM first and encodes it in one pass at the end —
+for a long text expect the promise to resolve a moment after the last progress event
+rather than instantly.
+
+There is no `'mp3'`: neither platform ships an MP3 **encoder** (both only decode it),
+and `.m4a` plays everywhere `.mp3` does, at better quality per byte. If you need MP3 for
+some legacy consumer, transcode the `.m4a` server-side.
 
 ### Cancelling
 

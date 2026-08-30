@@ -30,6 +30,7 @@ export default function App() {
   const [langFilter, setLangFilter] = useState('en');
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voice, setVoice] = useState<Voice | null>(null); // null = default (en-US)
+  const [aacFormat, setAacFormat] = useState(false);
   const [result, setResult] = useState<SynthesisResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +156,7 @@ export default function App() {
         language: voice?.language ?? 'en-US',
         rate: 1.0,
         ...(voice ? { voice: voice.identifier } : {}),
+        ...(aacFormat ? { format: 'aac' as const } : {}),
       });
       setSpokenText(text);
       setResult(res);
@@ -255,24 +257,24 @@ export default function App() {
       setSynthProgress(null);
       note(
         res.durationMs > 20_000
-          ? `PASS 1/4 — one file, ${Math.round(res.durationMs / 1000)}s`
-          : `FAIL 1/4 — only ${res.durationMs} ms of audio for ${long.length} chars`
+          ? `PASS 1/6 — one file, ${Math.round(res.durationMs / 1000)}s`
+          : `FAIL 1/6 — only ${res.durationMs} ms of audio for ${long.length} chars`
       );
 
       const last = res.marks[res.marks.length - 1];
       note(
         res.marks.length === 0
-          ? 'SKIP 2/4 — this engine reports no ranges'
+          ? 'SKIP 2/6 — this engine reports no ranges'
           : last.end > 4000
-            ? `PASS 2/4 — marks reach char ${last.end}, past the single-call limit`
-            : `FAIL 2/4 — marks stop at char ${last.end}, so later parts were not offset`
+            ? `PASS 2/6 — marks reach char ${last.end}, past the single-call limit`
+            : `FAIL 2/6 — marks stop at char ${last.end}, so later parts were not offset`
       );
       note(
         res.marks.length === 0
-          ? 'SKIP 3/4'
+          ? 'SKIP 3/6'
           : last.timeMs > 20_000
-            ? `PASS 3/4 — last mark at ${Math.round(last.timeMs / 1000)}s, so timings span the join`
-            : `FAIL 3/4 — last mark at ${last.timeMs} ms, timings did not shift across parts`
+            ? `PASS 3/6 — last mark at ${Math.round(last.timeMs / 1000)}s, so timings span the join`
+            : `FAIL 3/6 — last mark at ${last.timeMs} ms, timings did not shift across parts`
       );
       await deleteFile(res.uri).catch(() => {});
 
@@ -283,9 +285,33 @@ export default function App() {
       const err = (await failure) as { code?: string } | null;
       note(
         dropped >= 1 && err?.code === 'ERR_TTS_CANCELLED'
-          ? `PASS 4/4 — cancelled ${dropped}, rejected as ERR_TTS_CANCELLED`
-          : `FAIL 4/4 — cancelAll returned ${dropped}, rejection was ${err?.code ?? String(err)}`
+          ? `PASS 4/6 — cancelled ${dropped}, rejected as ERR_TTS_CANCELLED`
+          : `FAIL 4/6 — cancelAll returned ${dropped}, rejection was ${err?.code ?? String(err)}`
       );
+
+      // AAC over the same text exercises the multi-piece encode: the PCM pieces are
+      // measured, streamed into the encoder and muxed, and the timings must still span
+      // the join exactly as they do for WAV.
+      const aac = await synthesizeToFile(long, {
+        language: 'en-US',
+        timeoutMs: 120_000,
+        format: 'aac',
+      });
+      setSynthProgress(null);
+      note(
+        aac.uri.endsWith('.m4a') && Math.abs(aac.durationMs - res.durationMs) < res.durationMs / 10
+          ? `PASS 5/6 — .m4a of ${Math.round(aac.durationMs / 1000)}s matches the PCM duration`
+          : `FAIL 5/6 — …${aac.uri.slice(-6)}, ${aac.durationMs} ms vs ${res.durationMs} ms PCM`
+      );
+      const aacLast = aac.marks[aac.marks.length - 1];
+      note(
+        aac.marks.length === 0
+          ? 'SKIP 6/6 — this engine reports no ranges'
+          : aacLast.end > 4000 && aacLast.timeMs > 20_000
+            ? `PASS 6/6 — marks reach char ${aacLast.end} at ${Math.round(aacLast.timeMs / 1000)}s`
+            : `FAIL 6/6 — last mark stops at char ${aacLast.end}, ${aacLast.timeMs} ms`
+      );
+      await deleteFile(aac.uri).catch(() => {});
     } catch (e) {
       note(`FAIL — the check itself threw: ${String(e)}`);
     } finally {
@@ -357,6 +383,16 @@ export default function App() {
             Synthesizes to a file, then plays it while highlighting each word as it is
             spoken — driven by the timings returned with the file, not by live events.
           </Text>
+          <View style={styles.formatRow}>
+            {([false, true] as const).map((aac) => (
+              <Pressable
+                key={String(aac)}
+                style={[styles.formatChip, aacFormat === aac && styles.formatChipActive]}
+                onPress={() => setAacFormat(aac)}>
+                <Text style={styles.voiceText}>{aac ? 'AAC (.m4a)' : 'PCM'}</Text>
+              </Pressable>
+            ))}
+          </View>
           <Button title={busy ? 'Generating…' : 'Generate'} onPress={generate} disabled={busy} />
           {result && (
             <View style={styles.output}>
@@ -542,6 +578,9 @@ const styles = StyleSheet.create({
   input: { minHeight: 110, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 10, textAlignVertical: 'top' },
   filter: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 8, marginBottom: 10 },
   hint: { fontSize: 12, color: '#666', marginTop: 8 },
+  formatRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  formatChip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#f3f3f3' },
+  formatChipActive: { backgroundColor: '#cfe8ff' },
   voiceRow: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 6, marginTop: 4, backgroundColor: '#f3f3f3' },
   voiceRowActive: { backgroundColor: '#cfe8ff' },
   voiceText: { fontSize: 13 },

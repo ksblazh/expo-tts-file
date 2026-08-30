@@ -48,6 +48,21 @@ describe('delegation to the native module', () => {
     expect(native.synthesizeToFile).toHaveBeenCalledWith('hello', { language: 'en-US', rate: 1.2 });
   });
 
+  it('synthesizeToFile accepts both declared formats', async () => {
+    native.synthesizeToFile.mockResolvedValue({ uri: 'file:///t.m4a', durationMs: 1, marks: [] });
+
+    await synthesizeToFile('hello', { language: 'en-US', format: 'aac' });
+    await synthesizeToFile('hello', { language: 'en-US', format: 'pcm' });
+    expect(native.synthesizeToFile).toHaveBeenCalledWith('hello', {
+      language: 'en-US',
+      format: 'aac',
+    });
+    expect(native.synthesizeToFile).toHaveBeenCalledWith('hello', {
+      language: 'en-US',
+      format: 'pcm',
+    });
+  });
+
   it('synthesizeMixedToFile passes segments through', async () => {
     const result = { uri: 'file:///cache/tts.caf', durationMs: 42, marks: [] };
     native.synthesizeMixedToFile.mockResolvedValue(result);
@@ -196,6 +211,11 @@ describe('argument validation (rejects before crossing the bridge)', () => {
       'negative timeoutMs',
       () => synthesizeToFile('hi', { language: 'en', timeoutMs: -1 }),
       /options\.timeoutMs/,
+    ],
+    [
+      'an unknown format',
+      () => synthesizeToFile('hi', { language: 'en', format: 'mp3' as never }),
+      /options\.format/,
     ],
   ])('synthesizeToFile rejects on %s', async (_case, call, message) => {
     await expect(call()).rejects.toThrow(TypeError);

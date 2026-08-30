@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `format: 'aac'` — synthesize to an `.m4a` (AAC-LC) instead of uncompressed PCM, at
+  roughly a tenth of the size; the format for audio that is kept or shipped rather than
+  played once. iOS encodes while it writes (`AVAudioFile` does the conversion); Android
+  renders the engine's WAV first and encodes it in one `MediaCodec` pass, streaming the
+  PCM straight out of the pieces so the joined audio never exists on disk. `durationMs`,
+  `marks` and progress events are unaffected. MP3 stays out deliberately: neither
+  platform ships an MP3 encoder, and `.m4a` plays everywhere `.mp3` does.
 - `getVoices()` entries now carry `requiresNetwork` and `notInstalled`. An Android engine
   lists every voice it knows about — including ones it can only synthesize over the
   network and ones whose data the user never downloaded — and picking such a voice

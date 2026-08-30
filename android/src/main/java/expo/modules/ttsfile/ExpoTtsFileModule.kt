@@ -1,9 +1,12 @@
 package expo.modules.ttsfile
 
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -29,6 +32,7 @@ class SynthesizeOptions : Record {
   @Field var pitch: Double? = null
   @Field var voice: String? = null
   @Field var timeoutMs: Double? = null
+  @Field var format: String? = null
 }
 
 class ExpoTtsFileModule : Module() {
@@ -84,6 +88,9 @@ class ExpoTtsFileModule : Module() {
 
     /** Per PIECE, not per request: the engine keys its callbacks by this. */
     val utteranceId: String get() = "$id-$index"
+
+    /** The engine only writes WAV; for AAC every piece is an intermediate to encode. */
+    val aac: Boolean get() = options.format == "aac"
   }
 
   /**
@@ -120,15 +127,18 @@ class ExpoTtsFileModule : Module() {
         }
         val id = UUID.randomUUID().toString()
         val dir = cacheDir
-        val target = File(dir, "tts-$id.wav")
+        val aac = options.format == "aac"
+        val target = File(dir, if (aac) "tts-$id.m4a" else "tts-$id.wav")
         val pieces = splitForEngine(text, TextToSpeech.getMaxSpeechInputLength())
-        // A single piece is rendered straight into the final file — there is nothing to
-        // join, and copying it would only cost time and disk.
+        // A single PCM piece is rendered straight into the final file — there is nothing
+        // to join, and copying it would only cost time and disk. For AAC every piece is
+        // an intermediate WAV: the engine cannot write anything else, so the encode pass
+        // always runs.
         val chunks = pieces.mapIndexed { i, piece ->
           Chunk(
             piece.second,
             piece.first,
-            if (pieces.size == 1) target else File(dir, "tts-$id-$i.wav")
+            if (!aac && pieces.size == 1) target else File(dir, "tts-$id-$i.wav")
           )
         }
         enqueue(Request(text, options, promise, id, target, chunks))
@@ -462,7 +472,9 @@ class ExpoTtsFileModule : Module() {
       // finishPiece reports the progress event either way, so it is not repeated here.
       val req = finishPiece(utteranceId) ?: return
       try {
-        if (req.chunks.size > 1) {
+        if (req.aac) {
+          encodeAac(req.chunks, req.file)
+        } else if (req.chunks.size > 1) {
           concatWav(req.chunks, req.file)
         }
         req.promise.resolve(
@@ -478,7 +490,8 @@ class ExpoTtsFileModule : Module() {
           CodedException("ERR_TTS_FILE", "Could not assemble the audio: ${e.message}", e)
         )
       } finally {
-        if (req.chunks.size > 1) {
+        // Intermediates only: for single-piece PCM the one chunk IS the output file.
+        if (req.aac || req.chunks.size > 1) {
           req.chunks.forEach { it.file.delete() }
         }
         advance()
@@ -778,6 +791,153 @@ class ExpoTtsFileModule : Module() {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Encode the pieces' PCM into an AAC-LC `.m4a` at [out].
+   *
+   * The PCM is streamed straight out of the WAV pieces, so the joined audio never
+   * exists on disk; like [concatWav] this fills in [Chunk.frames] while measuring the
+   * pieces, which is what keeps the marks' timestamps right past the first piece.
+   * MediaCodec runs synchronously here — the caller is the engine's callback thread,
+   * where this module has nothing else to do until the request settles, exactly as
+   * with the WAV join.
+   */
+  private fun encodeAac(chunks: List<Chunk>, out: File) {
+    val regions = mutableListOf<Triple<File, Long, Long>>()
+    var format: ByteArray? = null
+    for (chunk in chunks) {
+      val (fmt, dataAt, dataSize) = wavLayout(chunk.file)
+      val known = format
+      if (known == null) {
+        format = fmt
+      } else if (!fmt.copyOf(16).contentEquals(known.copyOf(16))) {
+        throw IllegalStateException("the engine produced parts in different audio formats")
+      }
+      val blockAlign = leShort(fmt, 12)
+      chunk.frames = if (blockAlign > 0) dataSize / blockAlign else 0L
+      regions.add(Triple(chunk.file, dataAt, dataSize))
+    }
+    val fmt = format ?: throw IllegalStateException("nothing to encode")
+    if (leShort(fmt, 0) != 1 || leShort(fmt, 14) != 16) {
+      throw IllegalStateException("the engine did not produce 16-bit PCM")
+    }
+    val channels = leShort(fmt, 2)
+    val sampleRate = leInt(fmt, 4)
+    val blockAlign = leShort(fmt, 12)
+    // The request's watchdog is already disarmed by the time the encode runs, so a codec
+    // that stalls on some device would hang the promise forever — the exact state the
+    // watchdog exists to prevent. Encoding runs far faster than real time, so a budget of
+    // the audio's own duration plus a floor is generous, and blowing it turns into an
+    // ordinary ERR_TTS_FILE rejection with the partials deleted.
+    val deadline = android.os.SystemClock.elapsedRealtime() +
+      30_000L + (if (sampleRate > 0) chunks.sumOf { it.frames } * 1000L / sampleRate else 0L)
+
+    val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+    var muxer: MediaMuxer? = null
+    var muxerStarted = false
+    var source: RandomAccessFile? = null
+    try {
+      codec.configure(
+        MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels).apply {
+          setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+          // Per channel, since TTS output is mono or stereo depending on the engine.
+          // 64 kbit/s of AAC-LC is transparent for speech at the rates engines use.
+          setInteger(MediaFormat.KEY_BIT_RATE, 64_000 * channels)
+        },
+        null,
+        null,
+        MediaCodec.CONFIGURE_FLAG_ENCODE
+      )
+      codec.start()
+      val mux = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+      muxer = mux
+
+      var track = -1
+      var framesFed = 0L
+      var inputDone = false
+      var region = 0
+      var left = 0L
+      val scratch = ByteArray(16 * 1024)
+      val info = MediaCodec.BufferInfo()
+
+      while (true) {
+        if (android.os.SystemClock.elapsedRealtime() > deadline) {
+          throw IllegalStateException("the AAC encoder stalled")
+        }
+        if (!inputDone) {
+          val inIdx = codec.dequeueInputBuffer(10_000L)
+          if (inIdx >= 0) {
+            // Move to the next non-empty piece; between pieces `source` is null.
+            while (source == null && region < regions.size) {
+              val (file, at, size) = regions[region]
+              if (size > 0) {
+                source = RandomAccessFile(file, "r").also { it.seek(at) }
+                left = size
+              } else {
+                region++
+              }
+            }
+            val pcm = source
+            val ptsUs = framesFed * 1_000_000L / sampleRate
+            if (pcm == null) {
+              codec.queueInputBuffer(inIdx, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+              inputDone = true
+            } else {
+              val buf = codec.getInputBuffer(inIdx)
+                ?: throw IllegalStateException("encoder handed out no input buffer")
+              buf.clear()
+              // Whole PCM frames only, or the encoder's channel alignment drifts.
+              val want = (minOf(buf.remaining().toLong(), scratch.size.toLong(), left).toInt())
+                .let { it - it % blockAlign }
+              val n = pcm.read(scratch, 0, want)
+              if (n <= 0) {
+                throw IllegalStateException("part ended early: ${regions[region].first}")
+              }
+              buf.put(scratch, 0, n)
+              codec.queueInputBuffer(inIdx, 0, n, ptsUs, 0)
+              framesFed += n / blockAlign
+              left -= n
+              if (left == 0L) {
+                pcm.close()
+                source = null
+                region++
+              }
+            }
+          }
+        }
+        val outIdx = codec.dequeueOutputBuffer(info, 10_000L)
+        if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+          track = mux.addTrack(codec.outputFormat)
+          mux.start()
+          muxerStarted = true
+        } else if (outIdx >= 0) {
+          val outBuf = codec.getOutputBuffer(outIdx)
+          // The config buffer (the AudioSpecificConfig) travels in the track format
+          // above; writing it as a sample would corrupt the stream.
+          if (outBuf != null && info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+            if (track < 0) {
+              throw IllegalStateException("encoder produced audio before its format")
+            }
+            mux.writeSampleData(track, outBuf, info)
+          }
+          codec.releaseOutputBuffer(outIdx, false)
+          if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+            break
+          }
+        }
+      }
+    } finally {
+      // stop() throws when start() never ran (an encode that failed before any output);
+      // the file is garbage then and the caller deletes it, so the state error is noise.
+      runCatching { source?.close() }
+      runCatching { codec.stop() }
+      runCatching { codec.release() }
+      if (muxerStarted) {
+        runCatching { muxer?.stop() }
+      }
+      runCatching { muxer?.release() }
     }
   }
 
