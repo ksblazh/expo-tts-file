@@ -266,6 +266,10 @@ public class ExpoTtsFileModule: Module {
             "name": voice.name,
             "language": voice.language,
             "quality": ExpoTtsFileModule.qualityString(voice.quality),
+            // speechVoices() only lists voices that are installed and synthesize
+            // on-device, so both Android caveat flags are constants here.
+            "requiresNetwork": false,
+            "notInstalled": false,
           ]
         }
     }

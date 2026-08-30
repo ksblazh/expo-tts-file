@@ -102,6 +102,8 @@ getVoices(language?: string): Promise<Array<{
   name: string;
   language: string;
   quality: 'default' | 'enhanced' | 'premium';
+  requiresNetwork: boolean;   // Android: synthesized over the network; false on iOS
+  notInstalled: boolean;      // Android: listed but not downloaded; false on iOS
 }>>
 
 deleteFile(uri: string): Promise<void>   // one file this module produced
@@ -125,6 +127,13 @@ stopLiveSpeech(): Promise<void>
 `language` picks the platform default voice for that tag; a bare prefix such as `"ru"`
 resolves to an installed `ru-*` voice. The `getVoices` filter matches that prefix
 case-insensitively, so `"RU"` and `"en-us"` work as well as `"ru"` and `"en-US"`.
+
+An Android engine lists every voice it knows about, including ones it can only
+synthesize over the network (`requiresNetwork`) and ones whose data the user has not
+downloaded in the system TTS settings (`notInstalled`) — picking such a voice offline
+fails or silently substitutes another. Filter on those two flags before offering the
+list to a user. iOS only lists installed on-device voices, so both are always `false`
+there.
 
 `rate` and `pitch` are relative to the platform default (`1.0`). iOS clamps them to the
 synthesizer's own range (`AVSpeechUtteranceMinimum`/`MaximumSpeechRate`, pitch 0.5–2.0);

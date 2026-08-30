@@ -151,7 +151,12 @@ class ExpoTtsFileModule : Module() {
               "identifier" to voice.name,
               "name" to voice.name,
               "language" to voice.locale.toLanguageTag(),
-              "quality" to qualityString(voice.quality)
+              "quality" to qualityString(voice.quality),
+              // Engines list voices they cannot use offline (network synthesis) or have
+              // not downloaded yet; picking one anyway fails or silently substitutes.
+              // Surfaced so callers can filter before offering the voice to a user.
+              "requiresNetwork" to voice.isNetworkConnectionRequired,
+              "notInstalled" to (voice.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true)
             )
           }
         promise.resolve(result)

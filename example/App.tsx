@@ -500,12 +500,16 @@ export default function App() {
               onPress={() => setVoice(v)}>
               <Text style={styles.voiceText}>
                 {v.language} · {v.name} · {v.quality}
+                {v.requiresNetwork ? ' · network' : ''}
+                {v.notInstalled ? ' · not installed' : ''}
               </Text>
             </Pressable>
           ))}
           {voices.length > 0 && (
             <Text style={styles.hint}>
-              {filtered.length} shown / {voices.length} installed
+              {filtered.length} shown / {voices.length} listed ·{' '}
+              {voices.filter((v) => v.requiresNetwork).length} need network ·{' '}
+              {voices.filter((v) => v.notInstalled).length} not installed
             </Text>
           )}
         </Group>

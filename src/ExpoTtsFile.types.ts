@@ -123,4 +123,16 @@ export type Voice = {
   language: string;
   /** Quality hint, when the platform exposes one. */
   quality: VoiceQuality;
+  /**
+   * Android: the engine synthesizes this voice over the network, so offline it fails or
+   * silently substitutes another voice — filter on this before offering voices to a user
+   * who may be offline. Always `false` on iOS, which only lists on-device voices.
+   */
+  requiresNetwork: boolean;
+  /**
+   * Android: the engine advertises this voice but its data is not downloaded yet (the
+   * user installs it in the system TTS settings); picking it does not download it.
+   * Always `false` on iOS, which only lists installed voices.
+   */
+  notInstalled: boolean;
 };
