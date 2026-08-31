@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `getVoices()` entries now carry `requiresNetwork` and `notInstalled`. An Android engine
+  lists every voice it knows about — including ones it can only synthesize over the
+  network and ones whose data the user never downloaded — and picking such a voice
+  offline fails or silently substitutes another. The two flags let an app filter the
+  list before offering it to a user. iOS only lists installed on-device voices, so both
+  are always `false` there.
+
 ## [0.2.5] — 2026-08-28
 
 ### Added
