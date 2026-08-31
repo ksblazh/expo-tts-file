@@ -5,7 +5,7 @@
 [![iOS build](https://github.com/ksblazh/expo-tts-file/actions/workflows/ios.yml/badge.svg?branch=main&event=push)](https://github.com/ksblazh/expo-tts-file/actions/workflows/ios.yml)
 [![npm](https://img.shields.io/npm/v/expo-tts-file.svg)](https://www.npmjs.com/package/expo-tts-file)
 
-On-device **text-to-speech synthesized to an audio file** for React Native / Expo — offline, no network, no API keys. Turn a string into a playable audio file using the OS's built-in TTS, then play it however you like (e.g. background playback with [`expo-audio`](https://docs.expo.dev/versions/latest/sdk/audio/)).
+On-device **text-to-speech synthesized to an audio file** for React Native / Expo — offline, no network code, no API keys (see [Privacy](#privacy)). Turn a string into a playable audio file using the OS's built-in TTS, then play it however you like (e.g. background playback with [`expo-audio`](https://docs.expo.dev/versions/latest/sdk/audio/)).
 
 Built with the [Expo Modules API](https://docs.expo.dev/modules/) (Swift + Kotlin).
 
@@ -50,6 +50,15 @@ The IPA/live-speech functions are an iOS-only feature (they exist to work around
 handling of pronunciation); calling one elsewhere rejects with an error naming the
 function and the platform. On Android, combining stress marks such as `а́` are read
 natively in plain text, so no equivalent is needed there.
+
+## Privacy
+
+The text you synthesize never leaves your app through this module: it contains no network
+code, no analytics and no third-party service — synthesis is done by the operating
+system's own speech engine, and the audio is written to your app's private cache
+directory. On Android an engine may synthesize *some* voices over the network; those are
+flagged `requiresNetwork` in `getVoices()`, so filter on it if your privacy posture
+requires strictly on-device processing. iOS voices are always synthesized on-device.
 
 ## Installation
 
