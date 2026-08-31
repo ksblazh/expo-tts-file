@@ -224,6 +224,10 @@ out, so the files would be unreachable garbage.
 
 It covers the file paths only — the live `speak*` functions have `stopLiveSpeech()`.
 
+One boundary: a request whose speech has already been rendered and is only being
+assembled — the WAV join or the AAC encode — is past cancelling. It resolves normally a
+moment later and is not counted among the dropped.
+
 ### Highlighting words while the file plays
 
 `marks` comes back with the file: each entry is a range of your input text and the

@@ -200,11 +200,19 @@ class ExpoTtsFileModule : Module() {
     AsyncFunction("cancelAll") { promise: Promise ->
       val dropped = synchronized(queueLock) {
         val victims = mutableListOf<Request>()
+        // `current == null` while `processing` is still true means a finished synthesis
+        // is being assembled (joined or encoded) on the engine's callback thread. That
+        // request settles on its own and its advance() owns the reset: resetting here
+        // would let a NEW request start, whose state that advance() then clobbered —
+        // leaving its promise hanging with its watchdog already disarmed. The assembling
+        // request itself is past cancelling; rejecting it too would settle it twice.
+        if (current != null) {
+          processing = false
+        }
         current?.let { victims.add(it) }
         victims.addAll(queue)
         queue.clear()
         clearCurrentLocked()
-        processing = false
         victims
       }
       // Outside the lock: stop() reaches the engine, and rejecting crosses into JS.
