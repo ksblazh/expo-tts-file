@@ -8,6 +8,7 @@ struct SynthesizeOptions: Record {
   @Field var voice: String?
   @Field var ipa: String?
   @Field var timeoutMs: Double?
+  @Field var format: String?
 }
 
 struct SpeechSegment: Record {
@@ -377,9 +378,10 @@ public class ExpoTtsFileModule: Module {
   }
 
   private func synthesize(utterance: AVSpeechUtterance, options: SynthesizeOptions, promise: Promise) {
+    let aac = options.format == "aac"
     let fileURL: URL
     do {
-      fileURL = try Self.outputFileURL()
+      fileURL = try Self.outputFileURL(extension: aac ? "m4a" : "caf")
     } catch {
       promise.reject("ERR_TTS_FILE", "Could not create output file: \(error.localizedDescription)")
       return
@@ -535,9 +537,19 @@ public class ExpoTtsFileModule: Module {
       do {
         if audioFile == nil {
           sampleRate = pcmBuffer.format.sampleRate
+          // The settings describe the FILE; commonFormat/interleaved describe the
+          // buffers handed in. For AAC they differ, and AVAudioFile converts between
+          // the two itself — this settings dictionary is the entire encoder.
+          let settings: [String: Any] = aac
+            ? [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: pcmBuffer.format.sampleRate,
+                AVNumberOfChannelsKey: pcmBuffer.format.channelCount,
+              ]
+            : pcmBuffer.format.settings
           audioFile = try AVAudioFile(
             forWriting: fileURL,
-            settings: pcmBuffer.format.settings,
+            settings: settings,
             commonFormat: pcmBuffer.format.commonFormat,
             interleaved: pcmBuffer.format.isInterleaved
           )
@@ -577,8 +589,8 @@ public class ExpoTtsFileModule: Module {
     return dir
   }
 
-  private static func outputFileURL() throws -> URL {
-    return try cacheDirectoryURL().appendingPathComponent("tts-\(UUID().uuidString).caf")
+  private static func outputFileURL(extension ext: String) throws -> URL {
+    return try cacheDirectoryURL().appendingPathComponent("tts-\(UUID().uuidString).\(ext)")
   }
 
   /// The file `uri` names, or nil if this module did not write it.
